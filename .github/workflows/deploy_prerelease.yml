@@ -16,6 +16,8 @@ jobs:
         with:
           toolchain: stable-x86_64-unknown-linux-gnu
           override: true
+      - name: Setup Cargo cache
+        uses: Swatinem/rust-cache@v2
       - name: Package
         uses: actions-rs/cargo@v1
         with:
