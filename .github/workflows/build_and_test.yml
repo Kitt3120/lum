@@ -27,6 +27,8 @@ jobs:
         with:
           toolchain: ${{ matrix.toolchain }}
           override: true
+      - name: Setup Cargo cache
+        uses: Swatinem/rust-cache@v2
       - name: Build using ${{ matrix.toolchain }} for ${{ matrix.os }}
         uses: actions-rs/cargo@v1
         with:
@@ -57,6 +59,8 @@ jobs:
         with:
           toolchain: ${{ matrix.toolchain }}
           override: true
+      - name: Setup Cargo cache
+        uses: Swatinem/rust-cache@v2
       - name: Test using ${{ matrix.toolchain }} for ${{ matrix.os }}
         uses: actions-rs/cargo@v1
         with:
