@@ -1,0 +1,58 @@
+name: Deploy release
+on:
+  push:
+    branches: [main]
+jobs:
+  crates_io:
+    name: Deploy crates.io (release)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup Rust toolchain stable-x86_64-unknown-linux-gnu for ubuntu-latest
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable-x86_64-unknown-linux-gnu
+          override: true
+      - name: Setup Cargo cache
+        uses: Swatinem/rust-cache@v2
+      - name: Login to crates.io
+        uses: actions-rs/cargo@v1
+        with:
+          command: login
+          args: ${{ secrets.CRATES_IO_TOKEN }}
+      - name: Publish to crates.io
+        uses: actions-rs/cargo@v1
+        with:
+          command: publish
+  github:
+    name: Deploy GitHub (release)
+    needs: crates_io
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup Rust toolchain stable-x86_64-unknown-linux-gnu for ubuntu-latest
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable-x86_64-unknown-linux-gnu
+          override: true
+      - name: Setup Cargo cache
+        uses: Swatinem/rust-cache@v2
+      - name: Package
+        uses: actions-rs/cargo@v1
+        with:
+          command: package
+          args: --all-features
+      - name: Read crate name
+        id: crate_name
+        run: echo "crate_name=$(cargo read-manifest | jq -r .name)" >> $GITHUB_OUTPUT
+      - name: Read version
+        id: version
+        run: echo "version=$(cargo read-manifest | jq -r .version)" >> $GITHUB_OUTPUT
+      - name: Create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Provided by GitHub Actions
+        run: gh release create "${{ steps.version.outputs.version }}" --repo="$GITHUB_REPOSITORY" --title="Release ${{ steps.version.outputs.version }}" --generate-notes --latest "./target/package/${{ steps.crate_name.outputs.crate_name }}-${{ steps.version.outputs.version }}.crate"
