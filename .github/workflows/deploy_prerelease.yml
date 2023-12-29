@@ -1,0 +1,36 @@
+name: Deploy pre-release
+on:
+  push:
+    branches: [staging]
+jobs:
+  github:
+    name: Deploy GitHub (pre-release)
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup Rust toolchain stable-x86_64-unknown-linux-gnu for ubuntu-latest
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable-x86_64-unknown-linux-gnu
+          override: true
+      - name: Package
+        uses: actions-rs/cargo@v1
+        with:
+          command: package
+          args: --all-features
+      - name: Read crate name
+        id: crate_name
+        run: echo "crate_name=$(cargo read-manifest | jq -r .name)" >> $GITHUB_OUTPUT
+      - name: Read version
+        id: version
+        run: echo "version=$(cargo read-manifest | jq -r .version)" >> $GITHUB_OUTPUT
+      - name: Read git commit hash
+        id: commit_hash
+        run: echo "commit_hash=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_OUTPUT
+      - name: Create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Provided by GitHub Actions
+        run: gh release create "${{ steps.commit_hash.outputs.commit_hash }}" --repo="$GITHUB_REPOSITORY" --target staging --title="Pre-Release ${{ steps.commit_hash.outputs.commit_hash }} (${{ steps.version.outputs.version }})" --generate-notes --prerelease "./target/package/${{ steps.crate_name.outputs.crate_name }}-${{ steps.version.outputs.version }}.crate"

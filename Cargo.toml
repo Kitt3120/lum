@@ -1,0 +1,18 @@
+[package]
+name = "lum"
+version = "0.1.0"
+edition = "2021"
+description = "Lum Discord Bot"
+license= "MIT"
+readme = "README.md"
+authors = ["Torben Schweren"]
+repository = "https://github.com/Kitt3120/lum"
+
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde = { version = "1.0.193", features = ["derive"] }
+serde_json = "1.0.108"
+sqlx = { version = "0.7.3", features = ["runtime-tokio", "any", "postgres", "mysql", "sqlite", "tls-native-tls", "migrate", "macros", "uuid", "chrono", "json"] }
+tokio = { version = "1.35.1", features = ["full"] }
