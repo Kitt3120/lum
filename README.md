@@ -1,0 +1,2 @@
+# lum
+Lum Discord Bot
