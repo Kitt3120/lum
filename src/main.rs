@@ -23,10 +23,7 @@ async fn main() {
     let config = match config_handler.load_config() {
         Ok(config) => config,
         Err(err) => {
-            error!(
-                "Error reading config file: {}\n{} will exit.",
-                err, BOT_NAME
-            );
+            error!("Error reading config file: {}\n{} will exit.", err, BOT_NAME);
 
             return;
         }
@@ -43,10 +40,7 @@ async fn main() {
 
 fn setup_logger() {
     if let Err(error) = log::setup() {
-        panic!(
-            "Error setting up the Logger: {}\n{} will exit.",
-            error, BOT_NAME
-        );
+        panic!("Error setting up the Logger: {}\n{} will exit.", error, BOT_NAME);
     }
 }
 
