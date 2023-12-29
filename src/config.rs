@@ -1,102 +1,37 @@
 use core::fmt;
 use std::{
-    error::Error,
     fmt::{Display, Formatter},
     fs, io,
     path::PathBuf,
 };
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
-//TODO: Use thiserror
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Error)]
 pub enum ConfigPathError {
+    #[error("Unable to get OS config directory")]
     UnknownBasePath,
 }
 
-impl Error for ConfigPathError {}
-
-impl Display for ConfigPathError {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            ConfigPathError::UnknownBasePath => write!(f, "Unable to get OS config directory"),
-        }
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ConfigInitError {
-    PathError(ConfigPathError),
-    IOError(io::Error),
+    #[error("Unable to get config path: {0}")]
+    Path(#[from] ConfigPathError),
+    #[error("I/O error: {0}")]
+    IO(#[from] io::Error),
 }
 
-impl Error for ConfigInitError {}
-
-impl Display for ConfigInitError {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            ConfigInitError::PathError(e) => write!(f, "Path error: {}", e),
-            ConfigInitError::IOError(e) => write!(f, "IO error: {}", e),
-        }
-    }
-}
-
-impl From<ConfigPathError> for ConfigInitError {
-    fn from(e: ConfigPathError) -> Self {
-        ConfigInitError::PathError(e)
-    }
-}
-
-impl From<std::io::Error> for ConfigInitError {
-    fn from(e: std::io::Error) -> Self {
-        ConfigInitError::IOError(e)
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ConfigParseError {
-    PathError(ConfigPathError),
-    InitError(ConfigInitError),
-    SerdeError(serde_json::Error),
-    IoError(io::Error),
-}
-
-impl Error for ConfigParseError {}
-
-impl Display for ConfigParseError {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            ConfigParseError::PathError(e) => write!(f, "Path error: {}", e),
-            ConfigParseError::InitError(e) => write!(f, "Init error: {}", e),
-            ConfigParseError::SerdeError(e) => write!(f, "De-/Serialization error: {}", e),
-            ConfigParseError::IoError(e) => write!(f, "IO error: {}", e),
-        }
-    }
-}
-
-impl From<ConfigPathError> for ConfigParseError {
-    fn from(e: ConfigPathError) -> Self {
-        ConfigParseError::PathError(e)
-    }
-}
-
-impl From<ConfigInitError> for ConfigParseError {
-    fn from(e: ConfigInitError) -> Self {
-        ConfigParseError::InitError(e)
-    }
-}
-
-impl From<serde_json::Error> for ConfigParseError {
-    fn from(e: serde_json::Error) -> Self {
-        ConfigParseError::SerdeError(e)
-    }
-}
-
-impl From<io::Error> for ConfigParseError {
-    fn from(e: io::Error) -> Self {
-        ConfigParseError::IoError(e)
-    }
+    #[error("Unable to get config path: {0}")]
+    Path(#[from] ConfigPathError),
+    #[error("Unable to initialize config: {0}")]
+    Init(#[from] ConfigInitError),
+    #[error("Unable to serialize or deserialize config: {0}")]
+    Serde(#[from] serde_json::Error),
+    #[error("I/O error: {0}")]
+    IO(#[from] io::Error),
 }
 
 fn discord_token_default() -> String {
