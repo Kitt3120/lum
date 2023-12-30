@@ -1,8 +1,10 @@
 mod config;
+mod service;
 
 pub const BOT_NAME: &str = "Lum";
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let config_handler = config::ConfigHandler::new(BOT_NAME.to_lowercase().as_str());
     let config = match config_handler.get_config() {
         Ok(config) => config,
