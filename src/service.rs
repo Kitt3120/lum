@@ -1,10 +1,13 @@
 use std::{
     error::Error,
     fmt::Display,
+    future::Future,
     io,
+    pin::Pin,
     sync::{self, Arc, PoisonError},
 };
 
+use log::{info, warn};
 use tokio::sync::{Mutex, MutexGuard};
 
 #[derive(Debug)]
@@ -83,49 +86,170 @@ unsafe impl Send for IoError {}
 unsafe impl Sync for IoError {}
 impl Error for IoError {}
 
+//TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a future
 pub trait ServiceInternals {
-    async fn start(&mut self) -> Result<(), Box<dyn Error + Send + Sync>>;
-    async fn stop(&mut self) -> Result<(), Box<dyn Error + Send + Sync>>;
+    fn start(
+        &mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn Error + Send + Sync>>> + '_>>;
+    fn stop(
+        &mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn Error + Send + Sync>>> + '_>>;
 }
 
+//TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a future
 pub trait Service: ServiceInternals {
     fn info(&self) -> &ServiceInfo;
 
-    async fn start(&mut self) {
-        let mut lock = self.info().status.lock().await;
-        *lock = Status::Starting;
-        drop(lock);
+    fn wrapped_start(&mut self) -> Pin<Box<dyn Future<Output = ()> + '_>> {
+        Box::pin(async move {
+            let mut lock = self.info().status.lock().await;
 
-        match ServiceInternals::start(self).await {
-            Ok(()) => {
-                let mut lock = self.info().status.lock().await;
-                *lock = Status::Started;
+            if !matches!(&*lock, Status::Started) {
+                warn!(
+                    "Tried to start service {} while it was in state {}. Ignoring start request.",
+                    self.info().name,
+                    lock
+                );
+                return;
             }
-            Err(error) => {
-                let mut lock = self.info().status.lock().await;
-                *lock = Status::FailedStarting(error);
-            }
-        }
-    }
-    async fn stop(&mut self) {
-        let mut lock = self.info().status.lock().await;
-        *lock = Status::Stopping;
-        drop(lock);
 
-        match ServiceInternals::stop(self).await {
-            Ok(()) => {
-                let mut lock = self.info().status.lock().await;
-                *lock = Status::Stopped;
+            *lock = Status::Starting;
+            drop(lock);
+
+            match ServiceInternals::start(self).await {
+                Ok(()) => {
+                    let mut lock = self.info().status.lock().await;
+                    *lock = Status::Started;
+                }
+                Err(error) => {
+                    let mut lock = self.info().status.lock().await;
+                    *lock = Status::FailedStarting(error);
+                }
             }
-            Err(error) => {
-                let mut lock = self.info().status.lock().await;
-                *lock = Status::FailedStopping(error);
-            }
-        }
+        })
     }
 
-    async fn is_available(&self) -> bool {
-        let lock = self.info().status.lock().await;
-        matches!(&*lock, Status::Started)
+    fn wrapped_stop(&mut self) -> Pin<Box<dyn Future<Output = ()> + '_>> {
+        Box::pin(async move {
+            let mut lock = self.info().status.lock().await;
+
+            if matches!(&*lock, Status::Started) {
+                warn!(
+                    "Tried to stop service {} while it was in state {}. Ignoring stop request.",
+                    self.info().name,
+                    lock
+                );
+                return;
+            }
+
+            *lock = Status::Stopping;
+            drop(lock);
+
+            match ServiceInternals::stop(self).await {
+                Ok(()) => {
+                    let mut lock = self.info().status.lock().await;
+                    *lock = Status::Stopped;
+                }
+                Err(error) => {
+                    let mut lock = self.info().status.lock().await;
+                    *lock = Status::FailedStopping(error);
+                }
+            }
+        })
+    }
+
+    fn is_available(&self) -> Pin<Box<dyn Future<Output = bool> + '_>> {
+        Box::pin(async move {
+            let lock = self.info().status.lock().await;
+            matches!(&*lock, Status::Started)
+        })
+    }
+}
+
+#[derive(Default)]
+pub struct ServiceManagerBuilder {
+    services: Vec<Box<dyn Service>>,
+}
+
+impl ServiceManagerBuilder {
+    pub fn new() -> Self {
+        Self { services: vec![] }
+    }
+
+    pub fn with_service(&mut self, service: Box<dyn Service>) {
+        let service_exists = self
+            .services
+            .iter()
+            .any(|s| s.info().name == service.info().name);
+
+        if service_exists {
+            warn!(
+                "Tried to add service {} multiple times. Ignoring.",
+                service.info().name
+            );
+            return;
+        }
+
+        self.services.push(service);
+    }
+
+    pub fn build(self) -> ServiceManager {
+        ServiceManager::from(self)
+    }
+}
+
+pub struct ServiceManager {
+    pub services: Vec<Box<dyn Service>>,
+}
+
+impl ServiceManager {
+    pub fn builder() -> ServiceManagerBuilder {
+        ServiceManagerBuilder::new()
+    }
+
+    pub fn start_services(&mut self) -> Pin<Box<dyn Future<Output = ()> + '_>> {
+        Box::pin(async move {
+            for service in &mut self.services {
+                info!("Starting service: {}", service.info().name);
+                service.wrapped_start().await;
+            }
+        })
+    }
+
+    pub fn stop_services(&mut self) -> Pin<Box<dyn Future<Output = ()> + '_>> {
+        Box::pin(async move {
+            for service in &mut self.services {
+                info!("Stopping service: {}", service.info().name);
+                service.wrapped_stop().await;
+            }
+        })
+    }
+}
+
+impl Display for ServiceManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Services: ")?;
+
+        if self.services.is_empty() {
+            write!(f, "None")?;
+            return Ok(());
+        }
+
+        let mut services = self.services.iter().peekable();
+        while let Some(service) = services.next() {
+            write!(f, "{}", service.info().name)?;
+            if services.peek().is_some() {
+                write!(f, ", ")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl From<ServiceManagerBuilder> for ServiceManager {
+    fn from(builder: ServiceManagerBuilder) -> Self {
+        Self {
+            services: builder.services,
+        }
     }
 }

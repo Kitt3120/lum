@@ -54,7 +54,14 @@ impl Default for Config {
 
 impl Display for Config {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "discord_token: {}", self.discord_token)
+        let content = match serde_json::to_string(self) {
+            Ok(content) => content,
+            Err(error) => {
+                return write!(f, "Unable to serialize config: {}", error);
+            }
+        };
+
+        write!(f, "{}", content)
     }
 }
 
