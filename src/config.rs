@@ -38,7 +38,7 @@ fn discord_token_default() -> String {
     String::from("Please provide a token")
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Config {
     #[serde(rename = "discordToken", default = "discord_token_default")]
     pub discord_token: String,

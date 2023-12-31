@@ -1,7 +1,9 @@
 use std::time::SystemTime;
 
-use ::log::info;
+use ::log::{error, info};
 use bot::Bot;
+
+use crate::service::OverallStatus;
 
 pub mod bot;
 pub mod config;
@@ -13,42 +15,45 @@ pub fn is_debug() -> bool {
 }
 
 pub async fn run(mut bot: Bot) {
-    let now = SystemTime::now();
-
     if !log::is_set_up() {
         eprintln!(
             "Logger has not been set up! {} will not initialize.",
             bot.name
         );
+
         return;
     }
 
-    bot.init().await;
+    let now = SystemTime::now();
 
-    let elapsed = match now.elapsed() {
-        Ok(elapsed) => elapsed,
+    bot.start().await;
+
+    match now.elapsed() {
+        Ok(elapsed) => info!("Startup took {}ms", elapsed.as_millis()),
         Err(error) => {
-            panic!(
+            error!(
                 "Error getting elapsed startup time: {}\n{} will exit.",
                 error, bot.name
             );
+
+            return;
         }
     };
 
-    info!(
-        "{} is alive! Startup took {}ms",
-        bot.name,
-        elapsed.as_millis()
-    );
+    if bot.overall_status().await != OverallStatus::Healthy {
+        error!("{} is not healthy! Some essential services did not start up successfully. Please check the logs.\n{} will exit.", bot.name, bot.name);
+        return;
+    }
+
+    info!("{} is alive!", bot.name,);
 
     //TODO: Add CLI commands
-    while match tokio::signal::ctrl_c().await {
+    match tokio::signal::ctrl_c().await {
         Ok(_) => {
             info!("Received SIGINT, shutting down...");
-            false
         }
         Err(error) => {
             panic!("Error receiving SIGINT: {}\n{} will exit.", error, bot.name);
         }
-    } {}
+    }
 }

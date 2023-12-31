@@ -1,14 +1,7 @@
-use std::{
-    error::Error,
-    fmt::Display,
-    future::Future,
-    io,
-    pin::Pin,
-    sync::{self, Arc, PoisonError},
-};
+use std::{collections::HashMap, error::Error, fmt::Display, future::Future, pin::Pin, sync::Arc};
 
-use log::{info, warn};
-use tokio::sync::{Mutex, MutexGuard};
+use log::{error, info, warn};
+use tokio::sync::Mutex;
 
 #[derive(Debug)]
 pub enum Status {
@@ -35,7 +28,39 @@ impl Display for Status {
     }
 }
 
-#[derive(Debug)]
+impl PartialEq for Status {
+    fn eq(&self, other: &Self) -> bool {
+        matches!(
+            (self, other),
+            (Status::Started, Status::Started)
+                | (Status::Stopped, Status::Stopped)
+                | (Status::Starting, Status::Starting)
+                | (Status::Stopping, Status::Stopping)
+                | (Status::FailedStarting(_), Status::FailedStarting(_))
+                | (Status::FailedStopping(_), Status::FailedStopping(_))
+                | (Status::RuntimeError(_), Status::RuntimeError(_))
+        )
+    }
+}
+
+impl Eq for Status {}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum OverallStatus {
+    Healthy,
+    Unhealthy,
+}
+
+impl Display for OverallStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OverallStatus::Healthy => write!(f, "Healthy"),
+            OverallStatus::Unhealthy => write!(f, "Unhealthy"),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Priority {
     Essential,
     Optional,
@@ -50,6 +75,7 @@ impl Display for Priority {
     }
 }
 
+#[derive(Debug)]
 pub struct ServiceInfo {
     pub name: String,
     pub priority: Priority,
@@ -66,25 +92,6 @@ impl ServiceInfo {
         }
     }
 }
-
-#[derive(Debug)]
-struct IoError(io::Error);
-
-impl From<sync::PoisonError<MutexGuard<'_, Status>>> for IoError {
-    fn from(error: PoisonError<MutexGuard<Status>>) -> Self {
-        Self(io::Error::new(io::ErrorKind::Other, format!("{}", error)))
-    }
-}
-
-impl Display for IoError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-unsafe impl Send for IoError {}
-unsafe impl Sync for IoError {}
-impl Error for IoError {}
 
 //TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a future
 pub trait ServiceInternals {
@@ -116,14 +123,16 @@ pub trait Service: ServiceInternals {
             *lock = Status::Starting;
             drop(lock);
 
-            match ServiceInternals::start(self).await {
+            match self.start().await {
                 Ok(()) => {
                     let mut lock = self.info().status.lock().await;
                     *lock = Status::Started;
+                    info!("Started service: {}", self.info().name);
                 }
                 Err(error) => {
                     let mut lock = self.info().status.lock().await;
                     *lock = Status::FailedStarting(error);
+                    error!("Failed to start service: {}", self.info().name);
                 }
             }
         })
@@ -166,6 +175,20 @@ pub trait Service: ServiceInternals {
     }
 }
 
+impl PartialEq for dyn Service {
+    fn eq(&self, other: &Self) -> bool {
+        self.info().name == other.info().name
+    }
+}
+
+impl Eq for dyn Service {}
+
+impl std::hash::Hash for dyn Service {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.info().name.hash(state);
+    }
+}
+
 #[derive(Default)]
 pub struct ServiceManagerBuilder {
     services: Vec<Box<dyn Service>>,
@@ -176,21 +199,24 @@ impl ServiceManagerBuilder {
         Self { services: vec![] }
     }
 
-    pub fn with_service(&mut self, service: Box<dyn Service>) {
+    pub fn with_service(mut self, service: Box<dyn Service>) -> Self {
         let service_exists = self
             .services
             .iter()
-            .any(|s| s.info().name == service.info().name);
+            .any(|s| s.info().name == service.info().name); // Can't use *s == service here because value would be moved
 
         if service_exists {
             warn!(
                 "Tried to add service {} multiple times. Ignoring.",
                 service.info().name
             );
-            return;
+
+            return self;
         }
 
         self.services.push(service);
+
+        self
     }
 
     pub fn build(self) -> ServiceManager {
@@ -207,7 +233,7 @@ impl ServiceManager {
         ServiceManagerBuilder::new()
     }
 
-    pub fn start_services(&mut self) -> Pin<Box<dyn Future<Output = ()> + '_>> {
+    pub async fn start_services(&mut self) -> Pin<Box<dyn Future<Output = ()> + '_>> {
         Box::pin(async move {
             for service in &mut self.services {
                 info!("Starting service: {}", service.info().name);
@@ -222,6 +248,37 @@ impl ServiceManager {
                 info!("Stopping service: {}", service.info().name);
                 service.wrapped_stop().await;
             }
+        })
+    }
+
+    pub fn status_map(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = HashMap<&Box<dyn Service>, String>> + '_>> {
+        Box::pin(async move {
+            let mut map = HashMap::new();
+
+            for service in &self.services {
+                let status = service.info().status.lock().await;
+
+                let status = status.to_string();
+                map.insert(service, status.to_string());
+            }
+
+            map
+        })
+    }
+
+    pub fn overall_status(&self) -> Pin<Box<dyn Future<Output = OverallStatus> + '_>> {
+        Box::pin(async move {
+            for service in self.services.iter() {
+                let status = service.info().status.lock().await;
+
+                if !matches!(&*status, Status::Started) {
+                    return OverallStatus::Unhealthy;
+                }
+            }
+
+            OverallStatus::Healthy
         })
     }
 }
