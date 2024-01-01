@@ -1,11 +1,9 @@
-use std::{error::Error, future::Future, pin::Pin};
-
-use ::log::{debug, error, warn};
+use ::log::{error, warn};
 use lum::{
     bot::Bot,
     config::{Config, ConfigHandler, ConfigParseError},
     log,
-    service::{Priority, Service, ServiceInfo, ServiceInternals},
+    service::Service,
 };
 
 const BOT_NAME: &str = "Lum";
@@ -18,7 +16,7 @@ async fn main() {
         warn!("THIS IS A DEBUG RELEASE!");
     }
 
-    let config = match get_config() {
+    let _config = match get_config() {
         Ok(config) => config,
         Err(err) => {
             error!(
@@ -29,7 +27,6 @@ async fn main() {
             return;
         }
     };
-    debug!("Using config: {}", config);
 
     let bot = Bot::builder(BOT_NAME)
         .with_services(initialize_services())
@@ -49,7 +46,6 @@ fn setup_logger() {
 
 fn get_config() -> Result<Config, ConfigParseError> {
     let config_handler = ConfigHandler::new(BOT_NAME.to_lowercase().as_str());
-
     config_handler.get_config()
 }
 
@@ -57,33 +53,5 @@ fn initialize_services() -> Vec<Box<dyn Service>> {
     //TODO: Add services
     //...
 
-    let crash_service = CrashService {
-        info: ServiceInfo::new("CrashService", Priority::Essential),
-    };
-
-    vec![Box::new(crash_service)]
-}
-
-struct CrashService {
-    info: ServiceInfo,
-}
-
-impl ServiceInternals for CrashService {
-    fn start(
-        &mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn Error + Send + Sync>>> + '_>> {
-        Box::pin(async move { Ok(()) })
-    }
-
-    fn stop(
-        &mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn Error + Send + Sync>>> + '_>> {
-        Box::pin(async move { Ok(()) })
-    }
-}
-
-impl Service for CrashService {
-    fn info(&self) -> &ServiceInfo {
-        &self.info
-    }
+    vec![]
 }

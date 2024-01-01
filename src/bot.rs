@@ -1,4 +1,4 @@
-use crate::service::{OverallStatus, Service, ServiceManager, ServiceManagerBuilder};
+use crate::service::{PinnedBoxedFuture, Service, ServiceManager, ServiceManagerBuilder};
 
 pub struct BotBuilder {
     name: String,
@@ -42,16 +42,20 @@ impl Bot {
         BotBuilder::new(name)
     }
 
-    pub async fn start(&mut self) {
-        self.service_manager.start_services().await;
+    //TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a future
+    pub fn start(&mut self) -> PinnedBoxedFuture<'_, ()> {
+        Box::pin(async move {
+            self.service_manager.start_services().await;
+            //TODO: Potential for further initialization here, like modules
+        })
     }
 
-    pub async fn stop(&mut self) {
-        self.service_manager.stop_services().await;
-    }
-
-    pub async fn overall_status(&self) -> OverallStatus {
-        self.service_manager.overall_status().await
+    //TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a future
+    pub fn stop(&mut self) -> PinnedBoxedFuture<'_, ()> {
+        Box::pin(async move {
+            self.service_manager.stop_services().await;
+            //TODO: Potential for further deinitialization here, like modules
+        })
     }
 }
 

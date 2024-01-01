@@ -1,11 +1,10 @@
 use core::fmt;
+use serde::{Deserialize, Serialize};
 use std::{
     fmt::{Display, Formatter},
     fs, io,
     path::PathBuf,
 };
-
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Error)]

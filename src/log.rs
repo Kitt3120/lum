@@ -1,11 +1,10 @@
+use fern::colors::{Color, ColoredLevelConfig};
+use log::{LevelFilter, SetLoggerError};
 use std::{
     io,
     sync::atomic::{AtomicBool, Ordering},
     time::SystemTime,
 };
-
-use fern::colors::{Color, ColoredLevelConfig};
-use log::{LevelFilter, SetLoggerError};
 
 use crate::is_debug;
 

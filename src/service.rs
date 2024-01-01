@@ -1,6 +1,14 @@
-use std::{collections::HashMap, error::Error, fmt::Display, future::Future, pin::Pin, sync::Arc};
-
 use log::{error, info, warn};
+use std::{
+    cmp::Ordering,
+    collections::HashMap,
+    error::Error,
+    fmt::Display,
+    future::Future,
+    hash::{Hash, Hasher},
+    pin::Pin,
+    sync::Arc,
+};
 use tokio::sync::Mutex;
 
 #[derive(Debug)]
@@ -45,7 +53,7 @@ impl PartialEq for Status {
 
 impl Eq for Status {}
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub enum OverallStatus {
     Healthy,
     Unhealthy,
@@ -60,7 +68,7 @@ impl Display for OverallStatus {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub enum Priority {
     Essential,
     Optional,
@@ -77,6 +85,7 @@ impl Display for Priority {
 
 #[derive(Debug)]
 pub struct ServiceInfo {
+    pub id: String,
     pub name: String,
     pub priority: Priority,
 
@@ -84,84 +93,87 @@ pub struct ServiceInfo {
 }
 
 impl ServiceInfo {
-    pub fn new(name: &str, priority: Priority) -> Self {
+    pub fn new(id: &str, name: &str, priority: Priority) -> Self {
         Self {
+            id: id.to_string(),
             name: name.to_string(),
             priority,
             status: Arc::new(Mutex::new(Status::Stopped)),
         }
     }
+
+    pub async fn set_status(&self, status: Status) {
+        let mut lock = self.status.lock().await;
+        *lock = status;
+    }
 }
+
+pub type PinnedBoxedFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
+
+pub type PinnedBoxedFutureResult<'a, T> =
+    PinnedBoxedFuture<'a, Result<T, Box<dyn Error + Send + Sync>>>;
 
 //TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a future
 pub trait ServiceInternals {
-    fn start(
-        &mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn Error + Send + Sync>>> + '_>>;
-    fn stop(
-        &mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn Error + Send + Sync>>> + '_>>;
+    fn start(&mut self) -> PinnedBoxedFutureResult<'_, ()>;
+    fn stop(&mut self) -> PinnedBoxedFutureResult<'_, ()>;
 }
 
 //TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a future
 pub trait Service: ServiceInternals {
     fn info(&self) -> &ServiceInfo;
 
-    fn wrapped_start(&mut self) -> Pin<Box<dyn Future<Output = ()> + '_>> {
+    fn wrapped_start(&mut self) -> PinnedBoxedFuture<'_, ()> {
         Box::pin(async move {
-            let mut lock = self.info().status.lock().await;
+            let mut status = self.info().status.lock().await;
 
-            if !matches!(&*lock, Status::Started) {
+            if !matches!(&*status, Status::Stopped) {
                 warn!(
                     "Tried to start service {} while it was in state {}. Ignoring start request.",
                     self.info().name,
-                    lock
+                    status
                 );
                 return;
             }
 
-            *lock = Status::Starting;
-            drop(lock);
+            *status = Status::Starting;
+            drop(status);
 
             match self.start().await {
                 Ok(()) => {
-                    let mut lock = self.info().status.lock().await;
-                    *lock = Status::Started;
+                    self.info().set_status(Status::Started).await;
                     info!("Started service: {}", self.info().name);
                 }
                 Err(error) => {
-                    let mut lock = self.info().status.lock().await;
-                    *lock = Status::FailedStarting(error);
+                    self.info().set_status(Status::FailedStarting(error)).await;
                     error!("Failed to start service: {}", self.info().name);
                 }
             }
         })
     }
 
-    fn wrapped_stop(&mut self) -> Pin<Box<dyn Future<Output = ()> + '_>> {
+    fn wrapped_stop(&mut self) -> PinnedBoxedFuture<'_, ()> {
         Box::pin(async move {
-            let mut lock = self.info().status.lock().await;
+            let mut status = self.info().status.lock().await;
 
-            if matches!(&*lock, Status::Started) {
+            if matches!(&*status, Status::Started) {
                 warn!(
                     "Tried to stop service {} while it was in state {}. Ignoring stop request.",
                     self.info().name,
-                    lock
+                    status
                 );
                 return;
             }
 
-            *lock = Status::Stopping;
-            drop(lock);
+            *status = Status::Stopping;
+            drop(status);
 
             match ServiceInternals::stop(self).await {
                 Ok(()) => {
-                    let mut lock = self.info().status.lock().await;
-                    *lock = Status::Stopped;
+                    self.info().set_status(Status::Stopped).await;
                 }
                 Err(error) => {
-                    let mut lock = self.info().status.lock().await;
-                    *lock = Status::FailedStopping(error);
+                    self.info().set_status(Status::FailedStopping(error)).await;
                 }
             }
         })
@@ -175,16 +187,28 @@ pub trait Service: ServiceInternals {
     }
 }
 
+impl Eq for dyn Service {}
+
 impl PartialEq for dyn Service {
     fn eq(&self, other: &Self) -> bool {
         self.info().name == other.info().name
     }
 }
 
-impl Eq for dyn Service {}
+impl Ord for dyn Service {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.info().name.cmp(&other.info().name)
+    }
+}
 
-impl std::hash::Hash for dyn Service {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl PartialOrd for dyn Service {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Hash for dyn Service {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         self.info().name.hash(state);
     }
 }
@@ -233,7 +257,7 @@ impl ServiceManager {
         ServiceManagerBuilder::new()
     }
 
-    pub async fn start_services(&mut self) -> Pin<Box<dyn Future<Output = ()> + '_>> {
+    pub fn start_services(&mut self) -> PinnedBoxedFuture<'_, ()> {
         Box::pin(async move {
             for service in &mut self.services {
                 info!("Starting service: {}", service.info().name);
@@ -242,7 +266,7 @@ impl ServiceManager {
         })
     }
 
-    pub fn stop_services(&mut self) -> Pin<Box<dyn Future<Output = ()> + '_>> {
+    pub fn stop_services(&mut self) -> PinnedBoxedFuture<'_, ()> {
         Box::pin(async move {
             for service in &mut self.services {
                 info!("Stopping service: {}", service.info().name);
@@ -251,24 +275,30 @@ impl ServiceManager {
         })
     }
 
-    pub fn status_map(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = HashMap<&Box<dyn Service>, String>> + '_>> {
+    pub fn get_service(&self, id: &str) -> Option<&dyn Service> {
+        self.services
+            .iter()
+            .find(|s| s.info().id == id)
+            .map(|s| &**s)
+    }
+
+    pub fn status_map(&self) -> PinnedBoxedFuture<'_, HashMap<String, Arc<Mutex<Status>>>> {
         Box::pin(async move {
-            let mut map = HashMap::new();
+            let mut status_map = HashMap::new();
 
-            for service in &self.services {
-                let status = service.info().status.lock().await;
-
-                let status = status.to_string();
-                map.insert(service, status.to_string());
+            for service in self.services.iter() {
+                status_map.insert(
+                    service.info().id.clone(),
+                    Arc::clone(&service.info().status),
+                );
             }
 
-            map
+            status_map
         })
     }
 
-    pub fn overall_status(&self) -> Pin<Box<dyn Future<Output = OverallStatus> + '_>> {
+    //TODO: When Rust allows async closures, refactor this to use iterator methods instead of for loop
+    pub fn overall_status(&self) -> PinnedBoxedFuture<'_, OverallStatus> {
         Box::pin(async move {
             for service in self.services.iter() {
                 let status = service.info().status.lock().await;
@@ -279,6 +309,105 @@ impl ServiceManager {
             }
 
             OverallStatus::Healthy
+        })
+    }
+
+    //TODO: When Rust allows async closures, refactor this to use iterator methods instead of for loop
+    pub fn status_tree(&self) -> PinnedBoxedFuture<'_, String> {
+        Box::pin(async move {
+            let status_map = self.status_map().await;
+
+            let mut text_buffer = String::new();
+
+            let mut failed_essentials = HashMap::new();
+            let mut failed_optionals = HashMap::new();
+            let mut non_failed_essentials = HashMap::new();
+            let mut non_failed_optionals = HashMap::new();
+            let mut others = HashMap::new();
+
+            for (service, status) in status_map.into_iter() {
+                let priority = match self.get_service(service.as_str()) {
+                    Some(service) => service.info().priority,
+                    None => unreachable!(
+                        "Service with ID {} not found in ServiceManager. This should never happen!",
+                        service,
+                    ),
+                };
+
+                let status = status.lock().await;
+
+                match &*status {
+                    Status::Started | Status::Stopped => {
+                        if priority == Priority::Essential {
+                            non_failed_essentials.insert(service, status.to_string());
+                        } else {
+                            non_failed_optionals.insert(service, status.to_string());
+                        }
+                    }
+                    Status::FailedStarting(_)
+                    | Status::FailedStopping(_)
+                    | Status::RuntimeError(_) => {
+                        if priority == Priority::Essential {
+                            failed_essentials.insert(service, status.to_string());
+                        } else {
+                            failed_optionals.insert(service, status.to_string());
+                        }
+                    }
+                    _ => {
+                        others.insert(service, status.to_string());
+                    }
+                }
+            }
+
+            let section_generator = |services: &HashMap<String, String>, title: &str| -> String {
+                let mut text_buffer = String::new();
+
+                text_buffer.push_str(&format!("- {}:\n", title));
+
+                for (service, status) in services.iter() {
+                    let service = match self.get_service(service) {
+                        Some(service) => service,
+                        None => unreachable!(
+                    "Service with ID {} not found in ServiceManager. This should never happen!",
+                    service
+                ),
+                    };
+
+                    text_buffer.push_str(&format!(" - {}: {}\n", service.info().name, status));
+                }
+
+                text_buffer
+            };
+
+            if !failed_essentials.is_empty() {
+                text_buffer.push_str(
+                    section_generator(&failed_essentials, "Failed essential services").as_str(),
+                );
+            }
+
+            if !failed_optionals.is_empty() {
+                text_buffer.push_str(
+                    section_generator(&failed_optionals, "Failed optional services").as_str(),
+                );
+            }
+
+            if !non_failed_essentials.is_empty() {
+                text_buffer.push_str(
+                    section_generator(&non_failed_essentials, "Essential services").as_str(),
+                );
+            }
+
+            if !non_failed_optionals.is_empty() {
+                text_buffer.push_str(
+                    section_generator(&non_failed_optionals, "Optional services").as_str(),
+                );
+            }
+
+            if !others.is_empty() {
+                text_buffer.push_str(section_generator(&others, "Other services").as_str());
+            }
+
+            text_buffer
         })
     }
 }
