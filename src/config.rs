@@ -1,11 +1,10 @@
 use core::fmt;
+use serde::{Deserialize, Serialize};
 use std::{
     fmt::{Display, Formatter},
     fs, io,
     path::PathBuf,
 };
-
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -38,7 +37,7 @@ fn discord_token_default() -> String {
     String::from("Please provide a token")
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Config {
     #[serde(rename = "discordToken", default = "discord_token_default")]
     pub discord_token: String,
@@ -54,7 +53,14 @@ impl Default for Config {
 
 impl Display for Config {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "discord_token: {}", self.discord_token)
+        let content = match serde_json::to_string(self) {
+            Ok(content) => content,
+            Err(error) => {
+                return write!(f, "Unable to serialize config: {}", error);
+            }
+        };
+
+        write!(f, "{}", content)
     }
 }
 
