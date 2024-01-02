@@ -1,10 +1,5 @@
 use ::log::{error, warn};
-use lum::{
-    bot::Bot,
-    config::{Config, ConfigHandler, ConfigParseError},
-    log,
-    service::Service,
-};
+use lum::{bot::Bot, config::ConfigHandler, log, service::Service};
 
 const BOT_NAME: &str = "Lum";
 
@@ -16,7 +11,8 @@ async fn main() {
         warn!("THIS IS A DEBUG RELEASE!");
     }
 
-    let _config = match get_config() {
+    let config_handler = ConfigHandler::new(BOT_NAME.to_lowercase().as_str());
+    let _config = match config_handler.load_config() {
         Ok(config) => config,
         Err(err) => {
             error!(
@@ -42,11 +38,6 @@ fn setup_logger() {
             error, BOT_NAME
         );
     }
-}
-
-fn get_config() -> Result<Config, ConfigParseError> {
-    let config_handler = ConfigHandler::new(BOT_NAME.to_lowercase().as_str());
-    config_handler.get_config()
 }
 
 fn initialize_services() -> Vec<Box<dyn Service>> {
