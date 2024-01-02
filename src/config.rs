@@ -37,7 +37,7 @@ fn discord_token_default() -> String {
     String::from("Please provide a token")
 }
 
-#[derive(Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, PartialOrd, Serialize, Deserialize, Clone)]
 pub struct Config {
     #[serde(rename = "discordToken", default = "discord_token_default")]
     pub discord_token: String,
@@ -88,7 +88,7 @@ impl ConfigHandler {
 
     pub fn create_config_dir_path(&self) -> Result<(), ConfigInitError> {
         let path = self.get_config_dir_path()?;
-        std::fs::create_dir_all(path)?;
+        fs::create_dir_all(path)?;
         Ok(())
     }
 
@@ -112,7 +112,7 @@ impl ConfigHandler {
         Ok(())
     }
 
-    pub fn get_config(&self) -> Result<Config, ConfigParseError> {
+    pub fn load_config(&self) -> Result<Config, ConfigParseError> {
         let path = self.get_config_file_path()?;
         if !path.exists() {
             self.create_config_dir_path()?;
