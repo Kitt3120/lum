@@ -1,5 +1,10 @@
 use ::log::{error, warn};
-use lum::{bot::Bot, config::ConfigHandler, log, service::Service};
+use lum::{
+    bot::Bot,
+    config::{Config, ConfigHandler},
+    log,
+    service::{discord::DiscordService, Service},
+};
 
 const BOT_NAME: &str = "Lum";
 
@@ -12,7 +17,7 @@ async fn main() {
     }
 
     let config_handler = ConfigHandler::new(BOT_NAME.to_lowercase().as_str());
-    let _config = match config_handler.load_config() {
+    let config = match config_handler.load_config() {
         Ok(config) => config,
         Err(err) => {
             error!(
@@ -25,7 +30,7 @@ async fn main() {
     };
 
     let bot = Bot::builder(BOT_NAME)
-        .with_services(initialize_services())
+        .with_services(initialize_services(&config))
         .build();
 
     lum::run(bot).await;
@@ -40,9 +45,12 @@ fn setup_logger() {
     }
 }
 
-fn initialize_services() -> Vec<Box<dyn Service>> {
+fn initialize_services(config: &Config) -> Vec<Box<dyn Service>> {
     //TODO: Add services
     //...
 
-    vec![]
+    let discord_service =
+        DiscordService::new(config.discord_token.as_str(), config.discord_timeout);
+
+    vec![Box::new(discord_service)]
 }
