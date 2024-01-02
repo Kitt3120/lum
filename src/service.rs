@@ -11,6 +11,11 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+pub type PinnedBoxedFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
+
+pub type PinnedBoxedFutureResult<'a, T> =
+    PinnedBoxedFuture<'a, Result<T, Box<dyn Error + Send + Sync>>>;
+
 #[derive(Debug)]
 pub enum Status {
     Started,
@@ -102,24 +107,52 @@ impl ServiceInfo {
         }
     }
 
+    pub fn is_available(&self) -> Pin<Box<dyn Future<Output = bool> + '_>> {
+        Box::pin(async move {
+            let lock = self.status.lock().await;
+            matches!(&*lock, Status::Started)
+        })
+    }
+
     pub async fn set_status(&self, status: Status) {
         let mut lock = self.status.lock().await;
         *lock = status;
     }
 }
 
-pub type PinnedBoxedFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
+impl PartialEq for ServiceInfo {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
 
-pub type PinnedBoxedFutureResult<'a, T> =
-    PinnedBoxedFuture<'a, Result<T, Box<dyn Error + Send + Sync>>>;
+impl Eq for ServiceInfo {}
 
-//TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a future
+impl Ord for ServiceInfo {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.name.cmp(&other.name)
+    }
+}
+
+impl PartialOrd for ServiceInfo {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Hash for ServiceInfo {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+//TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a PinnedBoxedFutureResult
 pub trait ServiceInternals {
     fn start(&mut self) -> PinnedBoxedFutureResult<'_, ()>;
     fn stop(&mut self) -> PinnedBoxedFutureResult<'_, ()>;
 }
 
-//TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a future
+//TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a PinnedBoxedFutureResult
 pub trait Service: ServiceInternals {
     fn info(&self) -> &ServiceInfo;
 
@@ -171,18 +204,13 @@ pub trait Service: ServiceInternals {
             match ServiceInternals::stop(self).await {
                 Ok(()) => {
                     self.info().set_status(Status::Stopped).await;
+                    info!("Stopped service: {}", self.info().name);
                 }
                 Err(error) => {
                     self.info().set_status(Status::FailedStopping(error)).await;
+                    error!("Failed to stop service: {}", self.info().name);
                 }
             }
-        })
-    }
-
-    fn is_available(&self) -> Pin<Box<dyn Future<Output = bool> + '_>> {
-        Box::pin(async move {
-            let lock = self.info().status.lock().await;
-            matches!(&*lock, Status::Started)
         })
     }
 }
@@ -191,13 +219,13 @@ impl Eq for dyn Service {}
 
 impl PartialEq for dyn Service {
     fn eq(&self, other: &Self) -> bool {
-        self.info().name == other.info().name
+        self.info() == other.info()
     }
 }
 
 impl Ord for dyn Service {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.info().name.cmp(&other.info().name)
+        self.info().cmp(other.info())
     }
 }
 
@@ -209,7 +237,7 @@ impl PartialOrd for dyn Service {
 
 impl Hash for dyn Service {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.info().name.hash(state);
+        self.info().hash(state);
     }
 }
 
@@ -224,15 +252,12 @@ impl ServiceManagerBuilder {
     }
 
     pub fn with_service(mut self, service: Box<dyn Service>) -> Self {
-        let service_exists = self
-            .services
-            .iter()
-            .any(|s| s.info().name == service.info().name); // Can't use *s == service here because value would be moved
+        let service_exists = self.services.iter().any(|s| s.info() == service.info());
 
         if service_exists {
             warn!(
-                "Tried to add service {} multiple times. Ignoring.",
-                service.info().name
+                "Tried to add service {} ({}), but a service with that ID already exists. Ignoring.",
+                service.info().name, service.info().id
             );
 
             return self;
@@ -260,7 +285,6 @@ impl ServiceManager {
     pub fn start_services(&mut self) -> PinnedBoxedFuture<'_, ()> {
         Box::pin(async move {
             for service in &mut self.services {
-                info!("Starting service: {}", service.info().name);
                 service.wrapped_start().await;
             }
         })
@@ -269,7 +293,6 @@ impl ServiceManager {
     pub fn stop_services(&mut self) -> PinnedBoxedFuture<'_, ()> {
         Box::pin(async move {
             for service in &mut self.services {
-                info!("Stopping service: {}", service.info().name);
                 service.wrapped_stop().await;
             }
         })
@@ -423,7 +446,7 @@ impl Display for ServiceManager {
 
         let mut services = self.services.iter().peekable();
         while let Some(service) = services.next() {
-            write!(f, "{}", service.info().name)?;
+            write!(f, "{} ({})", service.info().name, service.info().id)?;
             if services.peek().is_some() {
                 write!(f, ", ")?;
             }
