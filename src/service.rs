@@ -11,6 +11,8 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+pub mod discord;
+
 pub type PinnedBoxedFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 pub type PinnedBoxedFutureResult<'a, T> =
@@ -174,12 +176,12 @@ pub trait Service: ServiceInternals {
 
             match self.start().await {
                 Ok(()) => {
-                    self.info().set_status(Status::Started).await;
                     info!("Started service: {}", self.info().name);
+                    self.info().set_status(Status::Started).await;
                 }
                 Err(error) => {
+                    error!("Failed to start service {}: {}", self.info().name, error);
                     self.info().set_status(Status::FailedStarting(error)).await;
-                    error!("Failed to start service: {}", self.info().name);
                 }
             }
         })
@@ -189,7 +191,7 @@ pub trait Service: ServiceInternals {
         Box::pin(async move {
             let mut status = self.info().status.lock().await;
 
-            if matches!(&*status, Status::Started) {
+            if !matches!(&*status, Status::Started) {
                 warn!(
                     "Tried to stop service {} while it was in state {}. Ignoring stop request.",
                     self.info().name,
@@ -203,12 +205,12 @@ pub trait Service: ServiceInternals {
 
             match ServiceInternals::stop(self).await {
                 Ok(()) => {
-                    self.info().set_status(Status::Stopped).await;
                     info!("Stopped service: {}", self.info().name);
+                    self.info().set_status(Status::Stopped).await;
                 }
                 Err(error) => {
+                    error!("Failed to stop service {}: {}", self.info().name, error);
                     self.info().set_status(Status::FailedStopping(error)).await;
-                    error!("Failed to stop service: {}", self.info().name);
                 }
             }
         })

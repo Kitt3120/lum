@@ -33,6 +33,11 @@ pub fn setup() -> Result<(), SetLoggerError> {
             ))
         })
         .level(get_min_log_level())
+        .level_for("serenity", LevelFilter::Warn)
+        .level_for("hyper", LevelFilter::Warn)
+        .level_for("tracing", LevelFilter::Warn)
+        .level_for("reqwest", LevelFilter::Warn)
+        .level_for("tungstenite", LevelFilter::Warn)
         .chain(io::stdout())
         .apply()?;
 
