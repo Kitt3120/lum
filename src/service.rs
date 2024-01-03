@@ -1,5 +1,6 @@
 use log::{error, info, warn};
 use std::{
+    any::{Any, TypeId},
     cmp::Ordering,
     collections::HashMap,
     error::Error,
@@ -7,7 +8,6 @@ use std::{
     future::Future,
     hash::{Hash, Hasher},
     pin::Pin,
-    sync::Arc,
 };
 use tokio::sync::Mutex;
 
@@ -96,7 +96,7 @@ pub struct ServiceInfo {
     pub name: String,
     pub priority: Priority,
 
-    pub status: Arc<Mutex<Status>>,
+    pub status: Mutex<Status>,
 }
 
 impl ServiceInfo {
@@ -105,15 +105,8 @@ impl ServiceInfo {
             id: id.to_string(),
             name: name.to_string(),
             priority,
-            status: Arc::new(Mutex::new(Status::Stopped)),
+            status: Mutex::new(Status::Stopped),
         }
-    }
-
-    pub fn is_available(&self) -> Pin<Box<dyn Future<Output = bool> + '_>> {
-        Box::pin(async move {
-            let lock = self.status.lock().await;
-            matches!(&*lock, Status::Started)
-        })
     }
 
     pub async fn set_status(&self, status: Status) {
@@ -157,6 +150,9 @@ pub trait ServiceInternals {
 //TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a PinnedBoxedFutureResult
 pub trait Service: ServiceInternals {
     fn info(&self) -> &ServiceInfo;
+
+    // Used for downcasting in get_service method of ServiceManager
+    fn as_any(&self) -> &dyn Any;
 
     fn wrapped_start(&mut self) -> PinnedBoxedFuture<'_, ()> {
         Box::pin(async move {
@@ -215,6 +211,13 @@ pub trait Service: ServiceInternals {
             }
         })
     }
+
+    fn is_available(&self) -> Pin<Box<dyn Future<Output = bool> + '_>> {
+        Box::pin(async move {
+            let lock = self.info().status.lock().await;
+            matches!(&*lock, Status::Started)
+        })
+    }
 }
 
 impl Eq for dyn Service {}
@@ -250,7 +253,9 @@ pub struct ServiceManagerBuilder {
 
 impl ServiceManagerBuilder {
     pub fn new() -> Self {
-        Self { services: vec![] }
+        Self {
+            services: Vec::new(),
+        }
     }
 
     pub fn with_service(mut self, service: Box<dyn Service>) -> Self {
@@ -300,22 +305,22 @@ impl ServiceManager {
         })
     }
 
-    pub fn get_service(&self, id: &str) -> Option<&dyn Service> {
+    pub fn get_service<T>(&self) -> Option<&T>
+    where
+        T: Service + 'static,
+    {
         self.services
             .iter()
-            .find(|s| s.info().id == id)
-            .map(|s| &**s)
+            .find(|s| TypeId::of::<T>() == s.as_any().type_id())
+            .and_then(|s| s.as_any().downcast_ref::<T>())
     }
 
-    pub fn status_map(&self) -> PinnedBoxedFuture<'_, HashMap<String, Arc<Mutex<Status>>>> {
+    pub fn status_map(&self) -> PinnedBoxedFuture<'_, HashMap<&dyn Service, &Mutex<Status>>> {
         Box::pin(async move {
             let mut status_map = HashMap::new();
 
             for service in self.services.iter() {
-                status_map.insert(
-                    service.info().id.clone(),
-                    Arc::clone(&service.info().status),
-                );
+                status_map.insert(&**service, &service.info().status);
             }
 
             status_map
@@ -344,92 +349,67 @@ impl ServiceManager {
 
             let mut text_buffer = String::new();
 
-            let mut failed_essentials = HashMap::new();
-            let mut failed_optionals = HashMap::new();
-            let mut non_failed_essentials = HashMap::new();
-            let mut non_failed_optionals = HashMap::new();
-            let mut others = HashMap::new();
+            let mut failed_essentials = String::new();
+            let mut failed_optionals = String::new();
+            let mut non_failed_essentials = String::new();
+            let mut non_failed_optionals = String::new();
+            let mut others = String::new();
 
             for (service, status) in status_map.into_iter() {
-                let priority = match self.get_service(service.as_str()) {
-                    Some(service) => service.info().priority,
-                    None => unreachable!(
-                        "Service with ID {} not found in ServiceManager. This should never happen!",
-                        service,
-                    ),
-                };
-
+                let info = service.info();
+                let priority = &info.priority;
                 let status = status.lock().await;
 
-                match &*status {
-                    Status::Started | Status::Stopped => {
-                        if priority == Priority::Essential {
-                            non_failed_essentials.insert(service, status.to_string());
-                        } else {
-                            non_failed_optionals.insert(service, status.to_string());
+                match *status {
+                    Status::Started | Status::Stopped => match priority {
+                        Priority::Essential => {
+                            non_failed_essentials
+                                .push_str(&format!(" - {}: {}\n", info.name, status));
                         }
-                    }
+                        Priority::Optional => {
+                            non_failed_optionals
+                                .push_str(&format!(" - {}: {}\n", info.name, status));
+                        }
+                    },
                     Status::FailedStarting(_)
                     | Status::FailedStopping(_)
-                    | Status::RuntimeError(_) => {
-                        if priority == Priority::Essential {
-                            failed_essentials.insert(service, status.to_string());
-                        } else {
-                            failed_optionals.insert(service, status.to_string());
+                    | Status::RuntimeError(_) => match priority {
+                        Priority::Essential => {
+                            failed_essentials.push_str(&format!(" - {}: {}\n", info.name, status));
                         }
-                    }
+                        Priority::Optional => {
+                            failed_optionals.push_str(&format!(" - {}: {}\n", info.name, status));
+                        }
+                    },
                     _ => {
-                        others.insert(service, status.to_string());
+                        others.push_str(&format!(" - {}: {}\n", info.name, status));
                     }
                 }
             }
 
-            let section_generator = |services: &HashMap<String, String>, title: &str| -> String {
-                let mut text_buffer = String::new();
-
-                text_buffer.push_str(&format!("- {}:\n", title));
-
-                for (service, status) in services.iter() {
-                    let service = match self.get_service(service) {
-                        Some(service) => service,
-                        None => unreachable!(
-                    "Service with ID {} not found in ServiceManager. This should never happen!",
-                    service
-                ),
-                    };
-
-                    text_buffer.push_str(&format!(" - {}: {}\n", service.info().name, status));
-                }
-
-                text_buffer
-            };
-
             if !failed_essentials.is_empty() {
-                text_buffer.push_str(
-                    section_generator(&failed_essentials, "Failed essential services").as_str(),
-                );
+                text_buffer.push_str(&format!("- {}:\n", "Failed essential services"));
+                text_buffer.push_str(&failed_essentials);
             }
 
             if !failed_optionals.is_empty() {
-                text_buffer.push_str(
-                    section_generator(&failed_optionals, "Failed optional services").as_str(),
-                );
+                text_buffer.push_str(&format!("- {}:\n", "Failed optional services"));
+                text_buffer.push_str(&failed_optionals);
             }
 
             if !non_failed_essentials.is_empty() {
-                text_buffer.push_str(
-                    section_generator(&non_failed_essentials, "Essential services").as_str(),
-                );
+                text_buffer.push_str(&format!("- {}:\n", "Essential services"));
+                text_buffer.push_str(&non_failed_essentials);
             }
 
             if !non_failed_optionals.is_empty() {
-                text_buffer.push_str(
-                    section_generator(&non_failed_optionals, "Optional services").as_str(),
-                );
+                text_buffer.push_str(&format!("- {}:\n", "Optional services"));
+                text_buffer.push_str(&non_failed_optionals);
             }
 
             if !others.is_empty() {
-                text_buffer.push_str(section_generator(&others, "Other services").as_str());
+                text_buffer.push_str(&format!("- {}:\n", "Other services"));
+                text_buffer.push_str(&others);
             }
 
             text_buffer

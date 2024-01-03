@@ -10,11 +10,11 @@ use serenity::{
     prelude::TypeMap,
     Client, Error,
 };
-use std::{sync::Arc, time::Duration};
+use std::{any::Any, sync::Arc, time::Duration};
 use tokio::{
     sync::{Mutex, Notify, RwLock},
     task::JoinHandle,
-    time::timeout,
+    time::{sleep, timeout},
 };
 
 pub struct DiscordService {
@@ -80,22 +80,27 @@ impl ServiceInternals for DiscordService {
             info!("Connecting to Discord");
             let client_handle = tokio::spawn(async move { client.start().await });
 
+            // This prevents waiting for the timeout if the client fails immediately
+            // TODO: Optimize this, as it will currently add 1000mqs to the startup time
+            sleep(Duration::from_secs(1)).await;
+            if client_handle.is_finished() {
+                client_handle.await??;
+                return Err("Discord client stopped unexpectedly and with no error".into());
+            }
+
             if timeout(self.connection_timeout, client_ready_notify.notified())
                 .await
                 .is_err()
             {
                 client_handle.abort();
+                let result = convert_thread_result(client_handle).await;
+                result?;
 
                 return Err(format!(
                     "Discord client failed to connect within {} seconds",
                     self.connection_timeout.as_secs()
                 )
                 .into());
-            }
-
-            if client_handle.is_finished() {
-                client_handle.await??;
-                return Err("Discord client stopped unexpectedly and with no error".into());
             }
 
             self.client_handle = Some(client_handle);
@@ -105,21 +110,15 @@ impl ServiceInternals for DiscordService {
 
     fn stop(&mut self) -> PinnedBoxedFutureResult<'_, ()> {
         Box::pin(async move {
-            if let Some(handle) = self.client_handle.take() {
+            if let Some(client_handle) = self.client_handle.take() {
                 info!("Waiting for Discord client to stop...");
-                handle.abort();
 
-                let result = match handle.await {
-                    Ok(result) => result,
-                    Err(_) => {
-                        info!("Discord client stopped");
-                        return Ok(());
-                    }
-                };
-
+                client_handle.abort();
+                let result = convert_thread_result(client_handle).await;
                 result?;
             }
 
+            info!("Discord client stopped");
             Ok(())
         })
     }
@@ -128,6 +127,18 @@ impl ServiceInternals for DiscordService {
 impl Service for DiscordService {
     fn info(&self) -> &ServiceInfo {
         &self.info
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+// If the thread ended WITHOUT a JoinError from aborting, the client already stopped unexpectedly
+async fn convert_thread_result(client_handle: JoinHandle<Result<(), Error>>) -> Result<(), Error> {
+    match client_handle.await {
+        Ok(result) => result,
+        Err(_) => Ok(()),
     }
 }
 
