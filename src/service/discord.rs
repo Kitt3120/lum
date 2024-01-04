@@ -1,4 +1,4 @@
-use super::{PinnedBoxedFutureResult, Priority, Service, ServiceInfo, ServiceInternals};
+use super::{PinnedBoxedFutureResult, Priority, Service, ServiceInfo, ServiceManager};
 use log::info;
 use serenity::{
     all::{GatewayIntents, Ready},
@@ -10,7 +10,7 @@ use serenity::{
     prelude::TypeMap,
     Client, Error,
 };
-use std::{any::Any, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use tokio::{
     sync::{Mutex, Notify, RwLock},
     task::JoinHandle,
@@ -35,7 +35,7 @@ impl DiscordService {
     pub fn new(discord_token: &str, connection_timeout: Duration) -> Self {
         Self {
             info: ServiceInfo::new("lum_builtin_discord", "Discord", Priority::Essential),
-            discord_token: discord_token.to_string(),
+            discord_token: "discord_token".to_string(),
             connection_timeout,
             client: Arc::new(Mutex::new(None)),
             client_handle: None,
@@ -49,8 +49,12 @@ impl DiscordService {
     }
 }
 
-impl ServiceInternals for DiscordService {
-    fn start(&mut self) -> PinnedBoxedFutureResult<'_, ()> {
+impl Service for DiscordService {
+    fn info(&self) -> &ServiceInfo {
+        &self.info
+    }
+
+    fn start(&mut self, service_manager: &ServiceManager) -> PinnedBoxedFutureResult<'_, ()> {
         Box::pin(async move {
             let framework = StandardFramework::new();
             framework.configure(Configuration::new().prefix("!"));
@@ -121,16 +125,6 @@ impl ServiceInternals for DiscordService {
             info!("Discord client stopped");
             Ok(())
         })
-    }
-}
-
-impl Service for DiscordService {
-    fn info(&self) -> &ServiceInfo {
-        &self.info
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

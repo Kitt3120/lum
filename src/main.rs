@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use ::log::{error, warn};
 use lum::{
     bot::Bot,
@@ -5,6 +7,7 @@ use lum::{
     log,
     service::{discord::DiscordService, Service},
 };
+use tokio::sync::RwLock;
 
 const BOT_NAME: &str = "Lum";
 
@@ -31,6 +34,7 @@ async fn main() {
 
     let bot = Bot::builder(BOT_NAME)
         .with_services(initialize_services(&config))
+        .await
         .build();
 
     lum::run(bot).await;
@@ -45,12 +49,12 @@ fn setup_logger() {
     }
 }
 
-fn initialize_services(config: &Config) -> Vec<Box<dyn Service>> {
+fn initialize_services(config: &Config) -> Vec<Arc<RwLock<dyn Service>>> {
     //TODO: Add services
     //...
 
     let discord_service =
         DiscordService::new(config.discord_token.as_str(), config.discord_timeout);
 
-    vec![Box::new(discord_service)]
+    vec![Arc::new(RwLock::new(discord_service))]
 }
