@@ -35,7 +35,7 @@ impl DiscordService {
     pub fn new(discord_token: &str, connection_timeout: Duration) -> Self {
         Self {
             info: ServiceInfo::new("lum_builtin_discord", "Discord", Priority::Essential),
-            discord_token: "discord_token".to_string(),
+            discord_token: discord_token.to_string(),
             connection_timeout,
             client: Arc::new(Mutex::new(None)),
             client_handle: None,

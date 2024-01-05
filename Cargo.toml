@@ -13,6 +13,7 @@ repository = "https://github.com/Kitt3120/lum"
 
 [dependencies]
 dirs = "5.0.1"
+downcast-rs = "1.2.0"
 fern = { version = "0.6.2", features = ["chrono", "colored", "date-based"] }
 humantime = "2.1.0"
 log = { version = "0.4.20", features = ["serde"] }

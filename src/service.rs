@@ -1,3 +1,4 @@
+use downcast_rs::{impl_downcast, DowncastSync};
 use log::{error, info, warn};
 use std::{
     any::Any,
@@ -6,6 +7,7 @@ use std::{
     fmt::Display,
     future::Future,
     hash::{Hash, Hasher},
+    mem,
     pin::Pin,
     sync::Arc,
 };
@@ -140,7 +142,7 @@ impl Hash for ServiceInfo {
     }
 }
 //TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a PinnedBoxedFutureResult
-pub trait Service: Any + Send + Sync {
+pub trait Service: DowncastSync {
     fn info(&self) -> &ServiceInfo;
     fn start(&mut self, service_manager: &ServiceManager) -> PinnedBoxedFutureResult<'_, ()>;
     fn stop(&mut self) -> PinnedBoxedFutureResult<'_, ()>;
@@ -213,6 +215,8 @@ pub trait Service: Any + Send + Sync {
         Box::pin(async move { matches!(&*(self.info().status.read().await), Status::Started) })
     }
 }
+
+impl_downcast!(sync Service);
 
 impl Eq for dyn Service {}
 
@@ -311,12 +315,32 @@ impl ServiceManager {
         })
     }
 
-    pub fn get_service<T>(&self) -> Option<Arc<T>>
+    pub async fn get_service<T>(&self) -> Option<Arc<RwLock<T>>>
     where
-        T: Service,
+        T: Service + Any + Send + Sync + 'static,
     {
-        //TODO
-        todo!("Implement")
+        for service in self.services.iter() {
+            let lock = service.read().await;
+            let is_t = lock.as_any().is::<T>();
+            drop(lock);
+
+            if is_t {
+                let arc_clone = Arc::clone(service);
+                let service_ptr: *const Arc<RwLock<dyn Service>> = &arc_clone;
+
+                /*
+                    I tried to do this in safe rust for 3 days, but I couldn't figure it out
+                    Should you come up with a way to do this in safe rust, please make a PR! :)
+                    Anyways, this should never cause any issues, since we checked if the service is of type T
+                */
+                unsafe {
+                    let t_ptr: *const Arc<RwLock<T>> = mem::transmute(service_ptr);
+                    return Some(Arc::clone(&*t_ptr));
+                }
+            }
+        }
+
+        None
     }
 
     //TODO: When Rust allows async closures, refactor this to use iterator methods instead of for loop
