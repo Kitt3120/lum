@@ -39,10 +39,18 @@ impl<T> SetLock<T> {
     }
 
     pub fn unwrap(&self) -> &T {
+        if self.data.is_none() {
+            panic!("unwrap called on an unset SetLock");
+        }
+
         self.data.as_ref().unwrap()
     }
 
     pub fn unwrap_mut(&mut self) -> &mut T {
+        if self.data.is_none() {
+            panic!("unwrap_mut called on an unset SetLock");
+        }
+
         self.data.as_mut().unwrap()
     }
 
