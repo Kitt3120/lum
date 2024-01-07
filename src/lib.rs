@@ -7,6 +7,7 @@ pub mod bot;
 pub mod config;
 pub mod log;
 pub mod service;
+pub mod setlock;
 
 pub fn is_debug() -> bool {
     cfg!(debug_assertions)
@@ -35,8 +36,9 @@ pub async fn run(mut bot: Bot) {
         }
     };
 
-    if bot.service_manager.overall_status().await != OverallStatus::Healthy {
-        let status_tree = bot.service_manager.status_tree().await;
+    let service_manager = bot.service_manager.read().await;
+    if service_manager.overall_status().await != OverallStatus::Healthy {
+        let status_tree = service_manager.status_tree().await;
 
         error!("{} is not healthy! Some essential services did not start up successfully. Please check the logs.\nService status tree:\n{}\n{} will exit.",
         bot.name,
@@ -44,6 +46,7 @@ pub async fn run(mut bot: Bot) {
         bot.name);
         return;
     }
+    drop(service_manager);
 
     info!("{} is alive", bot.name,);
 
