@@ -1,15 +1,19 @@
+use downcast_rs::{impl_downcast, DowncastSync};
 use log::{error, info, warn};
 use std::{
+    any::Any,
     cmp::Ordering,
-    collections::HashMap,
     error::Error,
     fmt::Display,
     future::Future,
     hash::{Hash, Hasher},
+    mem,
     pin::Pin,
     sync::Arc,
 };
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
+
+use crate::setlock::SetLock;
 
 pub mod discord;
 
@@ -92,11 +96,11 @@ impl Display for Priority {
 
 #[derive(Debug)]
 pub struct ServiceInfo {
-    pub id: String,
+    id: String,
     pub name: String,
     pub priority: Priority,
 
-    pub status: Arc<Mutex<Status>>,
+    pub status: Arc<RwLock<Status>>,
 }
 
 impl ServiceInfo {
@@ -105,20 +109,12 @@ impl ServiceInfo {
             id: id.to_string(),
             name: name.to_string(),
             priority,
-            status: Arc::new(Mutex::new(Status::Stopped)),
+            status: Arc::new(RwLock::new(Status::Stopped)),
         }
     }
 
-    pub fn is_available(&self) -> Pin<Box<dyn Future<Output = bool> + '_>> {
-        Box::pin(async move {
-            let lock = self.status.lock().await;
-            matches!(&*lock, Status::Started)
-        })
-    }
-
     pub async fn set_status(&self, status: Status) {
-        let mut lock = self.status.lock().await;
-        *lock = status;
+        *(self.status.write().await) = status
     }
 }
 
@@ -147,20 +143,24 @@ impl Hash for ServiceInfo {
         self.id.hash(state);
     }
 }
-
 //TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a PinnedBoxedFutureResult
-pub trait ServiceInternals {
-    fn start(&mut self) -> PinnedBoxedFutureResult<'_, ()>;
-    fn stop(&mut self) -> PinnedBoxedFutureResult<'_, ()>;
-}
-
-//TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a PinnedBoxedFutureResult
-pub trait Service: ServiceInternals {
+pub trait Service: DowncastSync {
     fn info(&self) -> &ServiceInfo;
+    fn start(
+        &mut self,
+        service_manager: Arc<RwLock<ServiceManager>>,
+    ) -> PinnedBoxedFutureResult<'_, ()>;
+    fn stop(&mut self) -> PinnedBoxedFutureResult<'_, ()>;
 
-    fn wrapped_start(&mut self) -> PinnedBoxedFuture<'_, ()> {
+    // Used for downcasting in get_service method of ServiceManager
+    //fn as_any_arc(&self) -> Arc<dyn Any + Send + Sync>;
+
+    fn wrapped_start(
+        &mut self,
+        service_manager: Arc<RwLock<ServiceManager>>,
+    ) -> PinnedBoxedFuture<()> {
         Box::pin(async move {
-            let mut status = self.info().status.lock().await;
+            let mut status = self.info().status.write().await;
 
             if !matches!(&*status, Status::Stopped) {
                 warn!(
@@ -174,7 +174,7 @@ pub trait Service: ServiceInternals {
             *status = Status::Starting;
             drop(status);
 
-            match self.start().await {
+            match self.start(service_manager).await {
                 Ok(()) => {
                     info!("Started service: {}", self.info().name);
                     self.info().set_status(Status::Started).await;
@@ -189,7 +189,7 @@ pub trait Service: ServiceInternals {
 
     fn wrapped_stop(&mut self) -> PinnedBoxedFuture<'_, ()> {
         Box::pin(async move {
-            let mut status = self.info().status.lock().await;
+            let mut status = self.info().status.write().await;
 
             if !matches!(&*status, Status::Started) {
                 warn!(
@@ -203,7 +203,7 @@ pub trait Service: ServiceInternals {
             *status = Status::Stopping;
             drop(status);
 
-            match ServiceInternals::stop(self).await {
+            match self.stop().await {
                 Ok(()) => {
                     info!("Stopped service: {}", self.info().name);
                     self.info().set_status(Status::Stopped).await;
@@ -215,7 +215,13 @@ pub trait Service: ServiceInternals {
             }
         })
     }
+
+    fn is_available(&self) -> PinnedBoxedFuture<'_, bool> {
+        Box::pin(async move { matches!(&*(self.info().status.read().await), Status::Started) })
+    }
 }
+
+impl_downcast!(sync Service);
 
 impl Eq for dyn Service {}
 
@@ -245,38 +251,75 @@ impl Hash for dyn Service {
 
 #[derive(Default)]
 pub struct ServiceManagerBuilder {
-    services: Vec<Box<dyn Service>>,
+    services: Vec<Arc<RwLock<dyn Service>>>,
 }
 
 impl ServiceManagerBuilder {
     pub fn new() -> Self {
-        Self { services: vec![] }
+        Self {
+            services: Vec::new(),
+        }
     }
 
-    pub fn with_service(mut self, service: Box<dyn Service>) -> Self {
-        let service_exists = self.services.iter().any(|s| s.info() == service.info());
+    //TODO: When Rust allows async closures, refactor this to use iterator methods instead of for loop
+    pub async fn with_service(mut self, service: Arc<RwLock<dyn Service>>) -> Self {
+        let lock = service.read().await;
 
-        if service_exists {
+        let mut found = false;
+        for registered_service in self.services.iter() {
+            let registered_service = registered_service.read().await;
+
+            if registered_service.info().id == lock.info().id {
+                found = true;
+            }
+        }
+
+        if found {
             warn!(
-                "Tried to add service {} ({}), but a service with that ID already exists. Ignoring.",
-                service.info().name, service.info().id
-            );
-
+                    "Tried to add service {} ({}), but a service with that ID already exists. Ignoring.",
+                    lock.info().name, lock.info().id
+                );
             return self;
         }
 
-        self.services.push(service);
+        drop(lock);
 
+        self.services.push(service);
         self
     }
 
-    pub fn build(self) -> ServiceManager {
-        ServiceManager::from(self)
+    pub async fn build(self) -> Arc<RwLock<ServiceManager>> {
+        let service_manager = ServiceManager {
+            services: self.services,
+            arc: RwLock::new(SetLock::new()),
+        };
+
+        let self_arc = Arc::new(RwLock::new(service_manager));
+
+        match self_arc
+            .write()
+            .await
+            .arc
+            .write()
+            .await
+            .set(Arc::clone(&self_arc))
+        {
+            Ok(()) => {}
+            Err(err) => {
+                panic!(
+                    "Failed to set ServiceManager in SetLock for self_arc: {}",
+                    err
+                );
+            }
+        }
+
+        self_arc
     }
 }
 
 pub struct ServiceManager {
-    pub services: Vec<Box<dyn Service>>,
+    pub services: Vec<Arc<RwLock<dyn Service>>>,
+    arc: RwLock<SetLock<Arc<RwLock<Self>>>>,
 }
 
 impl ServiceManager {
@@ -284,49 +327,59 @@ impl ServiceManager {
         ServiceManagerBuilder::new()
     }
 
-    pub fn start_services(&mut self) -> PinnedBoxedFuture<'_, ()> {
+    pub fn start_services(&self) -> PinnedBoxedFuture<'_, ()> {
         Box::pin(async move {
-            for service in &mut self.services {
-                service.wrapped_start().await;
+            for service in &self.services {
+                let mut service = service.write().await;
+                let service_manager = Arc::clone(self.arc.read().await.unwrap());
+                service.wrapped_start(service_manager).await;
             }
         })
     }
 
-    pub fn stop_services(&mut self) -> PinnedBoxedFuture<'_, ()> {
+    pub fn stop_services(&self) -> PinnedBoxedFuture<'_, ()> {
         Box::pin(async move {
-            for service in &mut self.services {
+            for service in &self.services {
+                let mut service = service.write().await;
                 service.wrapped_stop().await;
             }
         })
     }
 
-    pub fn get_service(&self, id: &str) -> Option<&dyn Service> {
-        self.services
-            .iter()
-            .find(|s| s.info().id == id)
-            .map(|s| &**s)
-    }
+    pub async fn get_service<T>(&self) -> Option<Arc<RwLock<T>>>
+    where
+        T: Service + Any + Send + Sync + 'static,
+    {
+        for service in self.services.iter() {
+            let lock = service.read().await;
+            let is_t = lock.as_any().is::<T>();
+            drop(lock);
 
-    pub fn status_map(&self) -> PinnedBoxedFuture<'_, HashMap<String, Arc<Mutex<Status>>>> {
-        Box::pin(async move {
-            let mut status_map = HashMap::new();
+            if is_t {
+                let arc_clone = Arc::clone(service);
+                let service_ptr: *const Arc<RwLock<dyn Service>> = &arc_clone;
 
-            for service in self.services.iter() {
-                status_map.insert(
-                    service.info().id.clone(),
-                    Arc::clone(&service.info().status),
-                );
+                /*
+                    I tried to do this in safe rust for 3 days, but I couldn't figure it out
+                    Should you come up with a way to do this in safe rust, please make a PR! :)
+                    Anyways, this should never cause any issues, since we checked if the service is of type T
+                */
+                unsafe {
+                    let t_ptr: *const Arc<RwLock<T>> = mem::transmute(service_ptr);
+                    return Some(Arc::clone(&*t_ptr));
+                }
             }
+        }
 
-            status_map
-        })
+        None
     }
 
     //TODO: When Rust allows async closures, refactor this to use iterator methods instead of for loop
     pub fn overall_status(&self) -> PinnedBoxedFuture<'_, OverallStatus> {
         Box::pin(async move {
             for service in self.services.iter() {
-                let status = service.info().status.lock().await;
+                let service = service.read().await;
+                let status = service.info().status.read().await;
 
                 if !matches!(&*status, Status::Started) {
                     return OverallStatus::Unhealthy;
@@ -340,96 +393,70 @@ impl ServiceManager {
     //TODO: When Rust allows async closures, refactor this to use iterator methods instead of for loop
     pub fn status_tree(&self) -> PinnedBoxedFuture<'_, String> {
         Box::pin(async move {
-            let status_map = self.status_map().await;
-
             let mut text_buffer = String::new();
 
-            let mut failed_essentials = HashMap::new();
-            let mut failed_optionals = HashMap::new();
-            let mut non_failed_essentials = HashMap::new();
-            let mut non_failed_optionals = HashMap::new();
-            let mut others = HashMap::new();
+            let mut failed_essentials = String::new();
+            let mut failed_optionals = String::new();
+            let mut non_failed_essentials = String::new();
+            let mut non_failed_optionals = String::new();
+            let mut others = String::new();
 
-            for (service, status) in status_map.into_iter() {
-                let priority = match self.get_service(service.as_str()) {
-                    Some(service) => service.info().priority,
-                    None => unreachable!(
-                        "Service with ID {} not found in ServiceManager. This should never happen!",
-                        service,
-                    ),
-                };
+            for service in self.services.iter() {
+                let service = service.read().await;
+                let info = service.info();
+                let priority = &info.priority;
+                let status = info.status.read().await;
 
-                let status = status.lock().await;
-
-                match &*status {
-                    Status::Started | Status::Stopped => {
-                        if priority == Priority::Essential {
-                            non_failed_essentials.insert(service, status.to_string());
-                        } else {
-                            non_failed_optionals.insert(service, status.to_string());
+                match *status {
+                    Status::Started | Status::Stopped => match priority {
+                        Priority::Essential => {
+                            non_failed_essentials
+                                .push_str(&format!(" - {}: {}\n", info.name, status));
                         }
-                    }
+                        Priority::Optional => {
+                            non_failed_optionals
+                                .push_str(&format!(" - {}: {}\n", info.name, status));
+                        }
+                    },
                     Status::FailedStarting(_)
                     | Status::FailedStopping(_)
-                    | Status::RuntimeError(_) => {
-                        if priority == Priority::Essential {
-                            failed_essentials.insert(service, status.to_string());
-                        } else {
-                            failed_optionals.insert(service, status.to_string());
+                    | Status::RuntimeError(_) => match priority {
+                        Priority::Essential => {
+                            failed_essentials.push_str(&format!(" - {}: {}\n", info.name, status));
                         }
-                    }
+                        Priority::Optional => {
+                            failed_optionals.push_str(&format!(" - {}: {}\n", info.name, status));
+                        }
+                    },
                     _ => {
-                        others.insert(service, status.to_string());
+                        others.push_str(&format!(" - {}: {}\n", info.name, status));
                     }
                 }
             }
 
-            let section_generator = |services: &HashMap<String, String>, title: &str| -> String {
-                let mut text_buffer = String::new();
-
-                text_buffer.push_str(&format!("- {}:\n", title));
-
-                for (service, status) in services.iter() {
-                    let service = match self.get_service(service) {
-                        Some(service) => service,
-                        None => unreachable!(
-                    "Service with ID {} not found in ServiceManager. This should never happen!",
-                    service
-                ),
-                    };
-
-                    text_buffer.push_str(&format!(" - {}: {}\n", service.info().name, status));
-                }
-
-                text_buffer
-            };
-
             if !failed_essentials.is_empty() {
-                text_buffer.push_str(
-                    section_generator(&failed_essentials, "Failed essential services").as_str(),
-                );
+                text_buffer.push_str(&format!("- {}:\n", "Failed essential services"));
+                text_buffer.push_str(&failed_essentials);
             }
 
             if !failed_optionals.is_empty() {
-                text_buffer.push_str(
-                    section_generator(&failed_optionals, "Failed optional services").as_str(),
-                );
+                text_buffer.push_str(&format!("- {}:\n", "Failed optional services"));
+                text_buffer.push_str(&failed_optionals);
             }
 
             if !non_failed_essentials.is_empty() {
-                text_buffer.push_str(
-                    section_generator(&non_failed_essentials, "Essential services").as_str(),
-                );
+                text_buffer.push_str(&format!("- {}:\n", "Essential services"));
+                text_buffer.push_str(&non_failed_essentials);
             }
 
             if !non_failed_optionals.is_empty() {
-                text_buffer.push_str(
-                    section_generator(&non_failed_optionals, "Optional services").as_str(),
-                );
+                text_buffer.push_str(&format!("- {}:\n", "Optional services"));
+                text_buffer.push_str(&non_failed_optionals);
             }
 
             if !others.is_empty() {
-                text_buffer.push_str(section_generator(&others, "Other services").as_str());
+                text_buffer.push_str(&format!("- {}:\n", "Other services"));
+                text_buffer.push_str(&others);
             }
 
             text_buffer
@@ -448,19 +475,12 @@ impl Display for ServiceManager {
 
         let mut services = self.services.iter().peekable();
         while let Some(service) = services.next() {
+            let service = service.blocking_read();
             write!(f, "{} ({})", service.info().name, service.info().id)?;
             if services.peek().is_some() {
                 write!(f, ", ")?;
             }
         }
         Ok(())
-    }
-}
-
-impl From<ServiceManagerBuilder> for ServiceManager {
-    fn from(builder: ServiceManagerBuilder) -> Self {
-        Self {
-            services: builder.services,
-        }
     }
 }

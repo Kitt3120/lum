@@ -1,5 +1,7 @@
-use super::{PinnedBoxedFutureResult, Priority, Service, ServiceInfo, ServiceInternals};
-use log::info;
+use crate::setlock::SetLock;
+
+use super::{PinnedBoxedFutureResult, Priority, Service, ServiceInfo, ServiceManager};
+use log::{error, info};
 use serenity::{
     all::{GatewayIntents, Ready},
     async_trait,
@@ -14,21 +16,21 @@ use std::{sync::Arc, time::Duration};
 use tokio::{
     sync::{Mutex, Notify, RwLock},
     task::JoinHandle,
-    time::timeout,
+    time::{sleep, timeout},
 };
 
 pub struct DiscordService {
     info: ServiceInfo,
     discord_token: String,
     connection_timeout: Duration,
-    pub client: Arc<Mutex<Option<Ready>>>,
+    pub ready: Arc<RwLock<SetLock<Ready>>>,
     client_handle: Option<JoinHandle<Result<(), Error>>>,
-    pub cache: Option<Arc<Cache>>,
-    pub data: Option<Arc<RwLock<TypeMap>>>,
-    pub http: Option<Arc<Http>>,
-    pub shard_manager: Option<Arc<ShardManager>>,
-    pub voice_manager: Option<Arc<dyn VoiceGatewayManager>>,
-    pub ws_url: Option<Arc<Mutex<String>>>,
+    pub cache: SetLock<Arc<Cache>>,
+    pub data: SetLock<Arc<RwLock<TypeMap>>>,
+    pub http: SetLock<Arc<Http>>,
+    pub shard_manager: SetLock<Arc<ShardManager>>,
+    pub voice_manager: SetLock<Arc<dyn VoiceGatewayManager>>,
+    pub ws_url: SetLock<Arc<Mutex<String>>>,
 }
 
 impl DiscordService {
@@ -37,20 +39,27 @@ impl DiscordService {
             info: ServiceInfo::new("lum_builtin_discord", "Discord", Priority::Essential),
             discord_token: discord_token.to_string(),
             connection_timeout,
-            client: Arc::new(Mutex::new(None)),
+            ready: Arc::new(RwLock::new(SetLock::new())),
             client_handle: None,
-            cache: None,
-            data: None,
-            http: None,
-            shard_manager: None,
-            voice_manager: None,
-            ws_url: None,
+            cache: SetLock::new(),
+            data: SetLock::new(),
+            http: SetLock::new(),
+            shard_manager: SetLock::new(),
+            voice_manager: SetLock::new(),
+            ws_url: SetLock::new(),
         }
     }
 }
 
-impl ServiceInternals for DiscordService {
-    fn start(&mut self) -> PinnedBoxedFutureResult<'_, ()> {
+impl Service for DiscordService {
+    fn info(&self) -> &ServiceInfo {
+        &self.info
+    }
+
+    fn start(
+        &mut self,
+        _service_manager: Arc<RwLock<ServiceManager>>,
+    ) -> PinnedBoxedFutureResult<'_, ()> {
         Box::pin(async move {
             let framework = StandardFramework::new();
             framework.configure(Configuration::new().prefix("!"));
@@ -60,43 +69,62 @@ impl ServiceInternals for DiscordService {
             let mut client = Client::builder(self.discord_token.as_str(), GatewayIntents::all())
                 .framework(framework)
                 .event_handler(EventHandler::new(
-                    Arc::clone(&self.client),
+                    Arc::clone(&self.ready),
                     Arc::clone(&client_ready_notify),
                 ))
                 .await?;
 
-            self.cache = Some(Arc::clone(&client.cache));
-            self.data = Some(Arc::clone(&client.data));
-            self.http = Some(Arc::clone(&client.http));
-            self.shard_manager = Some(Arc::clone(&client.shard_manager));
-            if let Some(shard_manager) = &self.shard_manager {
-                self.shard_manager = Some(Arc::clone(shard_manager));
+            if let Err(error) = self.cache.set(Arc::clone(&client.cache)) {
+                return Err(format!("Failed to set cache SetLock: {}", error).into());
             }
-            if let Some(voice_manager) = &self.voice_manager {
-                self.voice_manager = Some(Arc::clone(voice_manager));
+
+            if let Err(error) = self.data.set(Arc::clone(&client.data)) {
+                return Err(format!("Failed to set data SetLock: {}", error).into());
             }
-            self.ws_url = Some(Arc::clone(&client.ws_url));
+
+            if let Err(error) = self.http.set(Arc::clone(&client.http)) {
+                return Err(format!("Failed to set http SetLock: {}", error).into());
+            }
+
+            if let Err(error) = self.shard_manager.set(Arc::clone(&client.shard_manager)) {
+                return Err(format!("Failed to set shard_manager SetLock: {}", error).into());
+            }
+
+            if let Some(voice_manager) = &client.voice_manager {
+                if let Err(error) = self.voice_manager.set(Arc::clone(voice_manager)) {
+                    return Err(format!("Failed to set voice_manager SetLock: {}", error).into());
+                }
+            }
+
+            if let Err(error) = self.ws_url.set(Arc::clone(&client.ws_url)) {
+                return Err(format!("Failed to set ws_url SetLock: {}", error).into());
+            }
 
             info!("Connecting to Discord");
             let client_handle = tokio::spawn(async move { client.start().await });
+
+            // This prevents waiting for the timeout if the client fails immediately
+            // TODO: Optimize this, as it will currently add 1000mqs to the startup time
+            sleep(Duration::from_secs(1)).await;
+            if client_handle.is_finished() {
+                client_handle.await??;
+                return Err("Discord client stopped unexpectedly and with no error".into());
+            }
 
             if timeout(self.connection_timeout, client_ready_notify.notified())
                 .await
                 .is_err()
             {
                 client_handle.abort();
+                let result = convert_thread_result(client_handle).await;
+                result?;
 
                 return Err(format!(
                     "Discord client failed to connect within {} seconds",
                     self.connection_timeout.as_secs()
                 )
                 .into());
-            }
-
-            if client_handle.is_finished() {
-                client_handle.await??;
-                return Err("Discord client stopped unexpectedly and with no error".into());
-            }
+            };
 
             self.client_handle = Some(client_handle);
             Ok(())
@@ -105,39 +133,35 @@ impl ServiceInternals for DiscordService {
 
     fn stop(&mut self) -> PinnedBoxedFutureResult<'_, ()> {
         Box::pin(async move {
-            if let Some(handle) = self.client_handle.take() {
+            if let Some(client_handle) = self.client_handle.take() {
                 info!("Waiting for Discord client to stop...");
-                handle.abort();
 
-                let result = match handle.await {
-                    Ok(result) => result,
-                    Err(_) => {
-                        info!("Discord client stopped");
-                        return Ok(());
-                    }
-                };
-
+                client_handle.abort();
+                let result = convert_thread_result(client_handle).await;
                 result?;
             }
 
+            info!("Discord client stopped");
             Ok(())
         })
     }
 }
 
-impl Service for DiscordService {
-    fn info(&self) -> &ServiceInfo {
-        &self.info
+// If the thread ended WITHOUT a JoinError from aborting, the client already stopped unexpectedly
+async fn convert_thread_result(client_handle: JoinHandle<Result<(), Error>>) -> Result<(), Error> {
+    match client_handle.await {
+        Ok(result) => result,
+        Err(_) => Ok(()),
     }
 }
 
 struct EventHandler {
-    client: Arc<Mutex<Option<Ready>>>,
+    client: Arc<RwLock<SetLock<Ready>>>,
     ready_notify: Arc<Notify>,
 }
 
 impl EventHandler {
-    pub fn new(client: Arc<Mutex<Option<Ready>>>, ready_notify: Arc<Notify>) -> Self {
+    pub fn new(client: Arc<RwLock<SetLock<Ready>>>, ready_notify: Arc<Notify>) -> Self {
         Self {
             client,
             ready_notify,
@@ -149,7 +173,10 @@ impl EventHandler {
 impl client::EventHandler for EventHandler {
     async fn ready(&self, _ctx: Context, data_about_bot: Ready) {
         info!("Connected to Discord as {}", data_about_bot.user.tag());
-        *self.client.lock().await = Some(data_about_bot);
+        if let Err(error) = self.client.write().await.set(data_about_bot) {
+            error!("Failed to set client SetLock: {}", error);
+            panic!("Failed to set client SetLock: {}", error);
+        }
         self.ready_notify.notify_one();
     }
 }
