@@ -13,6 +13,8 @@ use std::{
 };
 use tokio::sync::RwLock;
 
+use crate::setlock::SetLock;
+
 pub mod discord;
 
 pub type PinnedBoxedFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
@@ -144,16 +146,19 @@ impl Hash for ServiceInfo {
 //TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a PinnedBoxedFutureResult
 pub trait Service: DowncastSync {
     fn info(&self) -> &ServiceInfo;
-    fn start(&mut self, service_manager: &ServiceManager) -> PinnedBoxedFutureResult<'_, ()>;
+    fn start(
+        &mut self,
+        service_manager: Arc<RwLock<ServiceManager>>,
+    ) -> PinnedBoxedFutureResult<'_, ()>;
     fn stop(&mut self) -> PinnedBoxedFutureResult<'_, ()>;
 
     // Used for downcasting in get_service method of ServiceManager
     //fn as_any_arc(&self) -> Arc<dyn Any + Send + Sync>;
 
-    fn wrapped_start<'a>(
-        &'a mut self,
-        service_manager: &'a ServiceManager,
-    ) -> PinnedBoxedFuture<'a, ()> {
+    fn wrapped_start(
+        &mut self,
+        service_manager: Arc<RwLock<ServiceManager>>,
+    ) -> PinnedBoxedFuture<()> {
         Box::pin(async move {
             let mut status = self.info().status.write().await;
 
@@ -283,13 +288,38 @@ impl ServiceManagerBuilder {
         self
     }
 
-    pub fn build(self) -> ServiceManager {
-        ServiceManager::from(self)
+    pub async fn build(self) -> Arc<RwLock<ServiceManager>> {
+        let service_manager = ServiceManager {
+            services: self.services,
+            arc: RwLock::new(SetLock::new()),
+        };
+
+        let self_arc = Arc::new(RwLock::new(service_manager));
+
+        match self_arc
+            .write()
+            .await
+            .arc
+            .write()
+            .await
+            .set(Arc::clone(&self_arc))
+        {
+            Ok(()) => {}
+            Err(err) => {
+                panic!(
+                    "Failed to set ServiceManager in SetLock for self_arc: {}",
+                    err
+                );
+            }
+        }
+
+        self_arc
     }
 }
 
 pub struct ServiceManager {
     pub services: Vec<Arc<RwLock<dyn Service>>>,
+    arc: RwLock<SetLock<Arc<RwLock<Self>>>>,
 }
 
 impl ServiceManager {
@@ -301,7 +331,8 @@ impl ServiceManager {
         Box::pin(async move {
             for service in &self.services {
                 let mut service = service.write().await;
-                service.wrapped_start(self).await;
+                let service_manager = Arc::clone(self.arc.read().await.unwrap());
+                service.wrapped_start(service_manager).await;
             }
         })
     }
@@ -451,13 +482,5 @@ impl Display for ServiceManager {
             }
         }
         Ok(())
-    }
-}
-
-impl From<ServiceManagerBuilder> for ServiceManager {
-    fn from(builder: ServiceManagerBuilder) -> Self {
-        Self {
-            services: builder.services,
-        }
     }
 }

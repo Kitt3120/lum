@@ -35,7 +35,8 @@ async fn main() {
     let bot = Bot::builder(BOT_NAME)
         .with_services(initialize_services(&config))
         .await
-        .build();
+        .build()
+        .await;
 
     lum::run(bot).await;
 }

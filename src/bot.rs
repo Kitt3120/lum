@@ -31,14 +31,17 @@ impl BotBuilder {
         self
     }
 
-    pub fn build(self) -> Bot {
-        Bot::from(self)
+    pub async fn build(self) -> Bot {
+        Bot {
+            name: self.name,
+            service_manager: self.service_manager.build().await,
+        }
     }
 }
 
 pub struct Bot {
     pub name: String,
-    pub service_manager: ServiceManager,
+    pub service_manager: Arc<RwLock<ServiceManager>>,
 }
 
 impl Bot {
@@ -49,7 +52,7 @@ impl Bot {
     //TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a future
     pub fn start(&mut self) -> PinnedBoxedFuture<'_, ()> {
         Box::pin(async move {
-            self.service_manager.start_services().await;
+            self.service_manager.write().await.start_services().await;
             //TODO: Potential for further initialization here, like modules
         })
     }
@@ -57,17 +60,8 @@ impl Bot {
     //TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a future
     pub fn stop(&mut self) -> PinnedBoxedFuture<'_, ()> {
         Box::pin(async move {
-            self.service_manager.stop_services().await;
+            self.service_manager.write().await.stop_services().await;
             //TODO: Potential for further deinitialization here, like modules
         })
-    }
-}
-
-impl From<BotBuilder> for Bot {
-    fn from(builder: BotBuilder) -> Self {
-        Self {
-            name: builder.name,
-            service_manager: builder.service_manager.build(),
-        }
     }
 }
