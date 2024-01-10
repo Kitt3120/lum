@@ -151,67 +151,6 @@ pub trait Service: DowncastSync {
     fn start(&mut self, service_manager: Arc<ServiceManager>) -> PinnedBoxedFutureResult<'_, ()>;
     fn stop(&mut self) -> PinnedBoxedFutureResult<'_, ()>;
 
-    // Used for downcasting in get_service method of ServiceManager
-    //fn as_any_arc(&self) -> Arc<dyn Any + Send + Sync>;
-
-    fn wrapped_start(&mut self, service_manager: Arc<ServiceManager>) -> PinnedBoxedFuture<()> {
-        Box::pin(async move {
-            let mut status = self.info().status.write().await;
-
-            if !matches!(&*status, Status::Stopped) {
-                warn!(
-                    "Tried to start service {} while it was in state {}. Ignoring start request.",
-                    self.info().name,
-                    status
-                );
-                return;
-            }
-
-            *status = Status::Starting;
-            drop(status);
-
-            match self.start(service_manager).await {
-                Ok(()) => {
-                    info!("Started service: {}", self.info().name);
-                    self.info().set_status(Status::Started).await;
-                }
-                Err(error) => {
-                    error!("Failed to start service {}: {}", self.info().name, error);
-                    self.info().set_status(Status::FailedToStart(error)).await;
-                }
-            }
-        })
-    }
-
-    fn wrapped_stop(&mut self) -> PinnedBoxedFuture<'_, ()> {
-        Box::pin(async move {
-            let mut status = self.info().status.write().await;
-
-            if !matches!(&*status, Status::Started) {
-                warn!(
-                    "Tried to stop service {} while it was in state {}. Ignoring stop request.",
-                    self.info().name,
-                    status
-                );
-                return;
-            }
-
-            *status = Status::Stopping;
-            drop(status);
-
-            match self.stop().await {
-                Ok(()) => {
-                    info!("Stopped service: {}", self.info().name);
-                    self.info().set_status(Status::Stopped).await;
-                }
-                Err(error) => {
-                    error!("Failed to stop service {}: {}", self.info().name, error);
-                    self.info().set_status(Status::FailedToStop(error)).await;
-                }
-            }
-        })
-    }
-
     fn is_available(&self) -> PinnedBoxedFuture<'_, bool> {
         Box::pin(async move { matches!(&*(self.info().status.read().await), Status::Started) })
     }
@@ -316,23 +255,102 @@ impl ServiceManager {
         ServiceManagerBuilder::new()
     }
 
-    pub fn start_services(&self) -> PinnedBoxedFuture<'_, ()> {
-        Box::pin(async move {
-            for service in &self.services {
-                let mut service = service.write().await;
-                let service_manager = Arc::clone(self.arc.read().await.unwrap());
-                service.wrapped_start(service_manager).await;
+    pub async fn manages_service(&self, service: &Arc<RwLock<dyn Service>>) -> bool {
+        for registered_service in self.services.iter() {
+            if registered_service.read().await.info().id == service.read().await.info().id {
+                return true;
             }
-        })
+        }
+
+        false
     }
 
-    pub fn stop_services(&self) -> PinnedBoxedFuture<'_, ()> {
-        Box::pin(async move {
-            for service in &self.services {
-                let mut service = service.write().await;
-                service.wrapped_stop().await;
+    pub async fn start_service(&self, service: Arc<RwLock<dyn Service>>) {
+        if !self.manages_service(&service).await {
+            warn!(
+                "Tried to start service {} ({}), but it's not managed by this Service Manager. Ignoring start request.",
+                service.read().await.info().name,
+                service.read().await.info().id
+            );
+            return;
+        }
+
+        let mut service = service.write().await;
+
+        let mut status = service.info().status.write().await;
+        if !matches!(&*status, Status::Stopped) {
+            warn!(
+                "Tried to start service {} while it was in state {}. Ignoring start request.",
+                service.info().name,
+                status
+            );
+            return;
+        }
+        *status = Status::Starting;
+        drop(status);
+
+        let service_manager = Arc::clone(self.arc.read().await.unwrap());
+        match service.start(service_manager).await {
+            Ok(()) => {
+                info!("Started service: {}", service.info().name);
+                service.info().set_status(Status::Started).await;
             }
-        })
+            Err(error) => {
+                error!("Failed to start service {}: {}", service.info().name, error);
+                service
+                    .info()
+                    .set_status(Status::FailedToStart(error))
+                    .await;
+            }
+        }
+    }
+
+    pub async fn stop_service(&self, service: Arc<RwLock<dyn Service>>) {
+        if !self.manages_service(&service).await {
+            warn!(
+                "Tried to stop service {} ({}), but it's not managed by this Service Manager. Ignoring stop request.",
+                service.read().await.info().name,
+                service.read().await.info().id
+            );
+            return;
+        }
+
+        let mut service = service.write().await;
+
+        let mut status = service.info().status.write().await;
+        if !matches!(&*status, Status::Started) {
+            warn!(
+                "Tried to stop service {} while it was in state {}. Ignoring stop request.",
+                service.info().name,
+                status
+            );
+            return;
+        }
+        *status = Status::Stopping;
+        drop(status);
+
+        match service.stop().await {
+            Ok(()) => {
+                info!("Stopped service: {}", service.info().name);
+                service.info().set_status(Status::Stopped).await;
+            }
+            Err(error) => {
+                error!("Failed to stop service {}: {}", service.info().name, error);
+                service.info().set_status(Status::FailedToStop(error)).await;
+            }
+        }
+    }
+
+    pub async fn start_services(&self) {
+        for service in &self.services {
+            self.start_service(Arc::clone(service)).await;
+        }
+    }
+
+    pub async fn stop_services(&self) {
+        for service in &self.services {
+            self.stop_service(Arc::clone(service)).await;
+        }
     }
 
     pub async fn get_service<T>(&self) -> Option<Arc<RwLock<T>>>
