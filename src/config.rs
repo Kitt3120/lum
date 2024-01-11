@@ -4,7 +4,6 @@ use std::{
     fmt::{Display, Formatter},
     fs, io,
     path::PathBuf,
-    time::Duration,
 };
 use thiserror::Error;
 
@@ -38,23 +37,16 @@ fn discord_token_default() -> String {
     String::from("Please provide a token")
 }
 
-fn discord_timeout_default() -> Duration {
-    Duration::from_secs(10)
-}
-
 #[derive(Debug, PartialEq, PartialOrd, Serialize, Deserialize, Clone)]
 pub struct Config {
     #[serde(rename = "discordToken", default = "discord_token_default")]
     pub discord_token: String,
-    #[serde(rename = "discordTimeout", default = "discord_timeout_default")]
-    pub discord_timeout: Duration,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
             discord_token: discord_token_default(),
-            discord_timeout: discord_timeout_default(),
         }
     }
 }
