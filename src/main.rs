@@ -54,8 +54,7 @@ fn initialize_services(config: &Config) -> Vec<Arc<RwLock<dyn Service>>> {
     //TODO: Add services
     //...
 
-    let discord_service =
-        DiscordService::new(config.discord_token.as_str(), config.discord_timeout);
+    let discord_service = DiscordService::new(config.discord_token.as_str());
 
     vec![Arc::new(RwLock::new(discord_service))]
 }

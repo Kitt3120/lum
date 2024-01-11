@@ -10,8 +10,9 @@ use std::{
     mem,
     pin::Pin,
     sync::Arc,
+    time::Duration,
 };
-use tokio::sync::RwLock;
+use tokio::{sync::RwLock, time::timeout};
 
 use crate::setlock::SetLock;
 
@@ -290,16 +291,35 @@ impl ServiceManager {
         drop(status);
 
         let service_manager = Arc::clone(self.arc.read().await.unwrap());
-        match service.start(service_manager).await {
-            Ok(()) => {
-                info!("Started service: {}", service.info().name);
-                service.info().set_status(Status::Started).await;
-            }
+
+        let start = service.start(service_manager);
+
+        let duration = Duration::from_secs(10); //TODO: Add to config instead of hardcoding
+        let timeout_result = timeout(duration, start);
+
+        match timeout_result.await {
+            Ok(start_result) => match start_result {
+                Ok(()) => {
+                    info!("Started service: {}", service.info().name);
+                    service.info().set_status(Status::Started).await;
+                }
+                Err(error) => {
+                    error!("Failed to start service {}: {}", service.info().name, error);
+                    service
+                        .info()
+                        .set_status(Status::FailedToStart(error))
+                        .await;
+                }
+            },
             Err(error) => {
-                error!("Failed to start service {}: {}", service.info().name, error);
+                error!(
+                    "Failed to start service {}: Timeout of {} seconds reached.",
+                    service.info().name,
+                    duration.as_secs()
+                );
                 service
                     .info()
-                    .set_status(Status::FailedToStart(error))
+                    .set_status(Status::FailedToStart(Box::new(error)))
                     .await;
             }
         }
@@ -329,14 +349,32 @@ impl ServiceManager {
         *status = Status::Stopping;
         drop(status);
 
-        match service.stop().await {
-            Ok(()) => {
-                info!("Stopped service: {}", service.info().name);
-                service.info().set_status(Status::Stopped).await;
-            }
+        let stop = service.stop();
+
+        let duration = Duration::from_secs(10); //TODO: Add to config instead of hardcoding
+        let timeout_result = timeout(duration, stop);
+
+        match timeout_result.await {
+            Ok(stop_result) => match stop_result {
+                Ok(()) => {
+                    info!("Stopped service: {}", service.info().name);
+                    service.info().set_status(Status::Stopped).await;
+                }
+                Err(error) => {
+                    error!("Failed to stop service {}: {}", service.info().name, error);
+                    service.info().set_status(Status::FailedToStop(error)).await;
+                }
+            },
             Err(error) => {
-                error!("Failed to stop service {}: {}", service.info().name, error);
-                service.info().set_status(Status::FailedToStop(error)).await;
+                error!(
+                    "Failed to stop service {}: Timeout of {} seconds reached.",
+                    service.info().name,
+                    duration.as_secs()
+                );
+                service
+                    .info()
+                    .set_status(Status::FailedToStop(Box::new(error)))
+                    .await;
             }
         }
     }

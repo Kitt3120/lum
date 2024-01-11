@@ -14,16 +14,15 @@ use serenity::{
 };
 use std::{sync::Arc, time::Duration};
 use tokio::{
-    spawn,
+    select, spawn,
     sync::{Mutex, Notify, RwLock},
     task::JoinHandle,
-    time::{sleep, timeout},
+    time::sleep,
 };
 
 pub struct DiscordService {
     info: ServiceInfo,
     discord_token: String,
-    connection_timeout: Duration,
     pub ready: Arc<RwLock<SetLock<Ready>>>,
     client_handle: Option<JoinHandle<Result<(), Error>>>,
     pub cache: SetLock<Arc<Cache>>,
@@ -35,11 +34,10 @@ pub struct DiscordService {
 }
 
 impl DiscordService {
-    pub fn new(discord_token: &str, connection_timeout: Duration) -> Self {
+    pub fn new(discord_token: &str) -> Self {
         Self {
             info: ServiceInfo::new("lum_builtin_discord", "Discord", Priority::Essential),
             discord_token: discord_token.to_string(),
-            connection_timeout,
             ready: Arc::new(RwLock::new(SetLock::new())),
             client_handle: None,
             cache: SetLock::new(),
@@ -101,28 +99,15 @@ impl Service for DiscordService {
             info!("Connecting to Discord");
             let client_handle = spawn(async move { client.start().await });
 
-            // This prevents waiting for the timeout if the client fails immediately
-            // TODO: Optimize this, as it will currently add 1000mqs to the startup time
-            sleep(Duration::from_secs(1)).await;
-            if client_handle.is_finished() {
-                client_handle.await??;
-                return Err("Discord client stopped unexpectedly and with no error".into());
+            select! {
+                _ = client_ready_notify.notified() => {},
+                _ = sleep(Duration::from_secs(2)) => {},
             }
 
-            if timeout(self.connection_timeout, client_ready_notify.notified())
-                .await
-                .is_err()
-            {
-                client_handle.abort();
-                let result = convert_thread_result(client_handle).await;
-                result?;
-
-                return Err(format!(
-                    "Discord client failed to connect within {} seconds",
-                    self.connection_timeout.as_secs()
-                )
-                .into());
-            };
+            if client_handle.is_finished() {
+                client_handle.await??;
+                return Err("Discord client stopped unexpectedly".into());
+            }
 
             self.client_handle = Some(client_handle);
             Ok(())
