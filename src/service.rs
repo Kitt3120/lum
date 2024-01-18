@@ -1,8 +1,9 @@
 use downcast_rs::{impl_downcast, DowncastSync};
 use log::{error, info, warn};
+use serenity::FutureExt;
 use std::{
-    any::Any,
     cmp::Ordering,
+    collections::HashMap,
     error::Error,
     fmt::Display,
     future::Future,
@@ -12,18 +13,19 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tokio::{sync::RwLock, time::timeout};
+use tokio::{spawn, sync::RwLock, task::JoinHandle, time::timeout};
 
 use crate::setlock::SetLock;
 
 pub mod discord;
 
-pub type BoxedFuture<'a, T> = Box<dyn Future<Output = T> + 'a>;
-pub type BoxedFutureResult<'a, T> = BoxedFuture<'a, Result<T, Box<dyn Error + Send + Sync>>>;
+pub type BoxedError = Box<dyn Error + Send + Sync>;
 
-pub type PinnedBoxedFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
-pub type PinnedBoxedFutureResult<'a, T> =
-    PinnedBoxedFuture<'a, Result<T, Box<dyn Error + Send + Sync>>>;
+pub type BoxedFuture<'a, T> = Box<dyn Future<Output = T> + Send + 'a>;
+pub type BoxedFutureResult<'a, T> = BoxedFuture<'a, Result<T, BoxedError>>;
+
+pub type PinnedBoxedFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+pub type PinnedBoxedFutureResult<'a, T> = PinnedBoxedFuture<'a, Result<T, BoxedError>>;
 
 #[derive(Debug)]
 pub enum Status {
@@ -31,9 +33,9 @@ pub enum Status {
     Stopped,
     Starting,
     Stopping,
-    FailedToStart(Box<dyn Error + Send + Sync>), //TODO: Test out if it'd be better to use a String instead
-    FailedToStop(Box<dyn Error + Send + Sync>),
-    RuntimeError(Box<dyn Error + Send + Sync>),
+    FailedToStart(BoxedError), //TODO: Test out if it'd be better to use a String instead
+    FailedToStop(BoxedError),
+    RuntimeError(BoxedError),
 }
 
 impl Display for Status {
@@ -151,6 +153,9 @@ pub trait Service: DowncastSync {
     fn info(&self) -> &ServiceInfo;
     fn start(&mut self, service_manager: Arc<ServiceManager>) -> PinnedBoxedFutureResult<'_, ()>;
     fn stop(&mut self) -> PinnedBoxedFutureResult<'_, ()>;
+    fn task<'a>(&self) -> Option<PinnedBoxedFutureResult<'a, ()>> {
+        None
+    }
 
     fn is_available(&self) -> PinnedBoxedFuture<'_, bool> {
         Box::pin(async move { matches!(&*(self.info().status.read().await), Status::Started) })
@@ -228,6 +233,7 @@ impl ServiceManagerBuilder {
         let service_manager = ServiceManager {
             services: self.services,
             arc: RwLock::new(SetLock::new()),
+            tasks: RwLock::new(HashMap::new()),
         };
 
         let self_arc = Arc::new(service_manager);
@@ -247,8 +253,9 @@ impl ServiceManagerBuilder {
 }
 
 pub struct ServiceManager {
-    pub services: Vec<Arc<RwLock<dyn Service>>>,
+    services: Vec<Arc<RwLock<dyn Service>>>,
     arc: RwLock<SetLock<Arc<Self>>>,
+    tasks: RwLock<HashMap<String, JoinHandle<()>>>,
 }
 
 impl ServiceManager {
@@ -256,7 +263,7 @@ impl ServiceManager {
         ServiceManagerBuilder::new()
     }
 
-    pub async fn manages_service(&self, service: &Arc<RwLock<dyn Service>>) -> bool {
+    pub async fn manages_service(&self, service: Arc<RwLock<dyn Service>>) -> bool {
         for registered_service in self.services.iter() {
             if registered_service.read().await.info().id == service.read().await.info().id {
                 return true;
@@ -267,45 +274,70 @@ impl ServiceManager {
     }
 
     pub async fn start_service(&self, service: Arc<RwLock<dyn Service>>) {
-        if !self.manages_service(&service).await {
+        let service_lock = service.read().await;
+
+        // Check if the service is managed by this Service Manager
+        if !self.manages_service(Arc::clone(&service)).await {
             warn!(
                 "Tried to start service {} ({}), but it's not managed by this Service Manager. Ignoring start request.",
-                service.read().await.info().name,
-                service.read().await.info().id
+                service_lock.info().name,
+                service_lock.info().id
             );
             return;
         }
 
-        let mut service = service.write().await;
+        // Check if the service already has a background task running
+        if self
+            .tasks
+            .read()
+            .await
+            .contains_key(service_lock.info().id.as_str())
+        {
+            warn!(
+                "Tried to start service {} ({}), which already has a background task running. Ignoring start request.",
+                service_lock.info().name,
+                service_lock.info().id
+            );
+            return;
+        }
 
-        let mut status = service.info().status.write().await;
+        // Upgrade the read lock to a write lock
+        drop(service_lock);
+        let mut service_lock = service.write().await;
+
+        // Check if the service is already running and cancel the start request if it is
+        let mut status = service_lock.info().status.write().await;
         if !matches!(&*status, Status::Stopped) {
             warn!(
                 "Tried to start service {} while it was in state {}. Ignoring start request.",
-                service.info().name,
+                service_lock.info().name,
                 status
             );
             return;
         }
+
+        // Set the status to Starting
         *status = Status::Starting;
         drop(status);
 
+        // Start the service
         let service_manager = Arc::clone(self.arc.read().await.unwrap());
-
-        let start = service.start(service_manager);
-
-        let duration = Duration::from_secs(10); //TODO: Add to config instead of hardcoding
-        let timeout_result = timeout(duration, start);
-
-        match timeout_result.await {
+        let start = service_lock.start(service_manager);
+        let timeout_duration = Duration::from_secs(10); //TODO: Add to config instead of hardcoding
+        let timeout_result = timeout(timeout_duration, start).await;
+        match timeout_result {
             Ok(start_result) => match start_result {
                 Ok(()) => {
-                    info!("Started service: {}", service.info().name);
-                    service.info().set_status(Status::Started).await;
+                    info!("Started service: {}", service_lock.info().name);
+                    service_lock.info().set_status(Status::Started).await;
                 }
                 Err(error) => {
-                    error!("Failed to start service {}: {}", service.info().name, error);
-                    service
+                    error!(
+                        "Failed to start service {}: {}",
+                        service_lock.info().name,
+                        error
+                    );
+                    service_lock
                         .info()
                         .set_status(Status::FailedToStart(error))
                         .await;
@@ -314,23 +346,77 @@ impl ServiceManager {
             Err(error) => {
                 error!(
                     "Failed to start service {}: Timeout of {} seconds reached.",
-                    service.info().name,
-                    duration.as_secs()
+                    service_lock.info().name,
+                    timeout_duration.as_secs()
                 );
-                service
+                service_lock
                     .info()
                     .set_status(Status::FailedToStart(Box::new(error)))
                     .await;
             }
         }
+
+        // Start the background task if one is defined
+        let task = service_lock.task();
+        if let Some(task) = task {
+            drop(service_lock);
+
+            let service_clone = Arc::clone(&service);
+            let task_with_watchdog = task.then(|result| async move {
+                let service = service_clone;
+
+                /*
+                    We technically only need a read lock here, but we want to immediately stop other
+                    services from accessing the service, so we acquire a write lock instead.
+                */
+                let service = service.write().await;
+
+                match result {
+                    Ok(()) => {
+                        error!("Background task of service {} ended unexpectedly! Service will be marked as failed.",
+                            service.info().name
+                        );
+                        service
+                            .info()
+                            .set_status(Status::RuntimeError(
+                                "Background task ended unexpectedly!".into(),
+                            ))
+                            .await;
+                    }
+                    Err(error) => {
+                        error!(
+                            "Background task of service {} ended with error: {}! Service will be marked as failed.",
+                            service.info().name, error
+                        );
+                        service
+                            .info()
+                            .set_status(Status::RuntimeError(
+                                format!("Background task ended with error: {}", error).into(),
+                            ))
+                            .await;
+                    }
+                }
+            });
+
+            let join_handle = spawn(task_with_watchdog);
+            self.tasks
+                .write()
+                .await
+                .insert(service.read().await.info().id.clone(), join_handle);
+            info!(
+                "Started background task for service {}",
+                service.read().await.info().name
+            );
+        }
     }
 
     pub async fn stop_service(&self, service: Arc<RwLock<dyn Service>>) {
-        if !self.manages_service(&service).await {
+        if !self.manages_service(Arc::clone(&service)).await {
+            let service = service.read().await;
             warn!(
                 "Tried to stop service {} ({}), but it's not managed by this Service Manager. Ignoring stop request.",
-                service.read().await.info().name,
-                service.read().await.info().id
+                service.info().name,
+                service.info().id
             );
             return;
         }
@@ -393,7 +479,7 @@ impl ServiceManager {
 
     pub async fn get_service<T>(&self) -> Option<Arc<RwLock<T>>>
     where
-        T: Service + Any + Send + Sync + 'static,
+        T: Service,
     {
         for service in self.services.iter() {
             let lock = service.read().await;

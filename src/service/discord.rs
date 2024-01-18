@@ -1,6 +1,6 @@
 use crate::setlock::SetLock;
 
-use super::{PinnedBoxedFutureResult, Priority, Service, ServiceInfo, ServiceManager};
+use super::{BoxedError, PinnedBoxedFutureResult, Priority, Service, ServiceInfo, ServiceManager};
 use log::{error, info};
 use serenity::{
     all::{GatewayIntents, Ready},
@@ -12,7 +12,7 @@ use serenity::{
     prelude::TypeMap,
     Client, Error,
 };
-use std::{sync::Arc, time::Duration};
+use std::{any::Any, future::Future, sync::Arc, time::Duration};
 use tokio::{
     select, spawn,
     sync::{Mutex, Notify, RwLock},
@@ -127,6 +127,24 @@ impl Service for DiscordService {
             info!("Discord client stopped");
             Ok(())
         })
+    }
+
+    fn task<'a>(&self) -> Option<PinnedBoxedFutureResult<'a, ()>> {
+        Some(Box::pin(async move {
+            let mut i = 0;
+            loop {
+                sleep(Duration::from_secs(1)).await;
+                if i < 5 {
+                    i += 1;
+                    info!("Wohoo!");
+                } else {
+                    info!("Bye!");
+                    break;
+                }
+            }
+
+            Err("Sheesh".into())
+        }))
     }
 }
 
