@@ -13,6 +13,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use thiserror::Error;
 use tokio::{spawn, sync::RwLock, task::JoinHandle, time::timeout};
 
 use crate::setlock::SetLock;
@@ -197,9 +198,7 @@ pub struct ServiceManagerBuilder {
 
 impl ServiceManagerBuilder {
     pub fn new() -> Self {
-        Self {
-            services: Vec::new(),
-        }
+        Self { services: Vec::new() }
     }
 
     //TODO: When Rust allows async closures, refactor this to use iterator methods instead of for loop
@@ -217,9 +216,10 @@ impl ServiceManagerBuilder {
 
         if found {
             warn!(
-                    "Tried to add service {} ({}), but a service with that ID already exists. Ignoring.",
-                    lock.info().name, lock.info().id
-                );
+                "Tried to add service {} ({}), but a service with that ID already exists. Ignoring.",
+                lock.info().name,
+                lock.info().id
+            );
             return self;
         }
 
@@ -241,15 +241,24 @@ impl ServiceManagerBuilder {
         match self_arc.arc.write().await.set(Arc::clone(&self_arc)) {
             Ok(()) => {}
             Err(err) => {
-                panic!(
-                    "Failed to set ServiceManager in SetLock for self_arc: {}",
-                    err
-                );
+                panic!("Failed to set ServiceManager in SetLock for self_arc: {}", err);
             }
         }
 
         self_arc
     }
+}
+
+#[derive(Debug, Error)]
+pub enum StartupError {
+    #[error("Service {0} is not managed by this Service Manager")]
+    ServiceNotManaged(String),
+    #[error("Service {0} already has a background task running")]
+    BackgroundTaskAlreadyRunning(String),
+    #[error("Service {0} is already running")]
+    ServiceAlreadyRunning(String),
+    #[error("Failed to start service {0}")]
+    FailedToStartService(String),
 }
 
 pub struct ServiceManager {
@@ -264,8 +273,9 @@ impl ServiceManager {
     }
 
     pub async fn manages_service(&self, service: Arc<RwLock<dyn Service>>) -> bool {
+        let service_id = service.read().await.info().id.clone();
         for registered_service in self.services.iter() {
-            if registered_service.read().await.info().id == service.read().await.info().id {
+            if registered_service.read().await.info().id == service_id {
                 return true;
             }
         }
@@ -273,17 +283,12 @@ impl ServiceManager {
         false
     }
 
-    pub async fn start_service(&self, service: Arc<RwLock<dyn Service>>) {
+    pub async fn start_service(&self, service: Arc<RwLock<dyn Service>>) -> Result<(), StartupError> {
         let service_lock = service.read().await;
 
         // Check if the service is managed by this Service Manager
         if !self.manages_service(Arc::clone(&service)).await {
-            warn!(
-                "Tried to start service {} ({}), but it's not managed by this Service Manager. Ignoring start request.",
-                service_lock.info().name,
-                service_lock.info().id
-            );
-            return;
+            return Err(StartupError::ServiceNotManaged(service_lock.info().id.clone()));
         }
 
         // Check if the service already has a background task running
@@ -293,12 +298,9 @@ impl ServiceManager {
             .await
             .contains_key(service_lock.info().id.as_str())
         {
-            warn!(
-                "Tried to start service {} ({}), which already has a background task running. Ignoring start request.",
-                service_lock.info().name,
-                service_lock.info().id
-            );
-            return;
+            return Err(StartupError::BackgroundTaskAlreadyRunning(
+                service_lock.info().id.clone(),
+            ));
         }
 
         // Upgrade the read lock to a write lock
@@ -308,12 +310,9 @@ impl ServiceManager {
         // Check if the service is already running and cancel the start request if it is
         let mut status = service_lock.info().status.write().await;
         if !matches!(&*status, Status::Stopped) {
-            warn!(
-                "Tried to start service {} while it was in state {}. Ignoring start request.",
-                service_lock.info().name,
-                status
-            );
-            return;
+            return Err(StartupError::ServiceAlreadyRunning(
+                service_lock.info().id.clone(),
+            ));
         }
 
         // Set the status to Starting
@@ -328,39 +327,27 @@ impl ServiceManager {
         match timeout_result {
             Ok(start_result) => match start_result {
                 Ok(()) => {
-                    info!("Started service: {}", service_lock.info().name);
                     service_lock.info().set_status(Status::Started).await;
                 }
                 Err(error) => {
-                    error!(
-                        "Failed to start service {}: {}",
-                        service_lock.info().name,
-                        error
-                    );
-                    service_lock
-                        .info()
-                        .set_status(Status::FailedToStart(error))
-                        .await;
+                    service_lock.info().set_status(Status::FailedToStart(error)).await;
+                    return Err(StartupError::FailedToStartService(service_lock.info().id.clone()));
                 }
             },
             Err(error) => {
-                error!(
-                    "Failed to start service {}: Timeout of {} seconds reached.",
-                    service_lock.info().name,
-                    timeout_duration.as_secs()
-                );
                 service_lock
                     .info()
                     .set_status(Status::FailedToStart(Box::new(error)))
                     .await;
+                return Err(StartupError::FailedToStartService(service_lock.info().id.clone()));
             }
         }
 
         // Start the background task if one is defined
         let task = service_lock.task();
-        if let Some(task) = task {
-            drop(service_lock);
+        drop(service_lock);
 
+        if let Some(task) = task {
             let service_clone = Arc::clone(&service);
             let task_with_watchdog = task.then(|result| async move {
                 let service = service_clone;
@@ -371,22 +358,23 @@ impl ServiceManager {
                 */
                 let service = service.write().await;
 
+                //TODO: Better handling of this. For example, send a message to a channel and let ServiceManager know.
                 match result {
                     Ok(()) => {
-                        error!("Background task of service {} ended unexpectedly! Service will be marked as failed.",
+                        error!(
+                            "Background task of service {} ended unexpectedly! Service will be marked as failed.",
                             service.info().name
                         );
                         service
                             .info()
-                            .set_status(Status::RuntimeError(
-                                "Background task ended unexpectedly!".into(),
-                            ))
+                            .set_status(Status::RuntimeError("Background task ended unexpectedly!".into()))
                             .await;
                     }
                     Err(error) => {
                         error!(
                             "Background task of service {} ended with error: {}! Service will be marked as failed.",
-                            service.info().name, error
+                            service.info().name,
+                            error
                         );
                         service
                             .info()
@@ -408,6 +396,8 @@ impl ServiceManager {
                 service.read().await.info().name
             );
         }
+
+        Ok(())
     }
 
     pub async fn stop_service(&self, service: Arc<RwLock<dyn Service>>) {
@@ -465,10 +455,14 @@ impl ServiceManager {
         }
     }
 
-    pub async fn start_services(&self) {
+    pub async fn start_services(&self) -> Vec<Result<(), StartupError>> {
+        let mut results = Vec::new();
+
         for service in &self.services {
-            self.start_service(Arc::clone(service)).await;
+            results.push(self.start_service(Arc::clone(service)).await);
         }
+
+        results
     }
 
     pub async fn stop_services(&self) {
@@ -541,24 +535,22 @@ impl ServiceManager {
                 match *status {
                     Status::Started | Status::Stopped => match priority {
                         Priority::Essential => {
-                            non_failed_essentials
-                                .push_str(&format!(" - {}: {}\n", info.name, status));
+                            non_failed_essentials.push_str(&format!(" - {}: {}\n", info.name, status));
                         }
                         Priority::Optional => {
-                            non_failed_optionals
-                                .push_str(&format!(" - {}: {}\n", info.name, status));
+                            non_failed_optionals.push_str(&format!(" - {}: {}\n", info.name, status));
                         }
                     },
-                    Status::FailedToStart(_)
-                    | Status::FailedToStop(_)
-                    | Status::RuntimeError(_) => match priority {
-                        Priority::Essential => {
-                            failed_essentials.push_str(&format!(" - {}: {}\n", info.name, status));
+                    Status::FailedToStart(_) | Status::FailedToStop(_) | Status::RuntimeError(_) => {
+                        match priority {
+                            Priority::Essential => {
+                                failed_essentials.push_str(&format!(" - {}: {}\n", info.name, status));
+                            }
+                            Priority::Optional => {
+                                failed_optionals.push_str(&format!(" - {}: {}\n", info.name, status));
+                            }
                         }
-                        Priority::Optional => {
-                            failed_optionals.push_str(&format!(" - {}: {}\n", info.name, status));
-                        }
-                    },
+                    }
                     _ => {
                         others.push_str(&format!(" - {}: {}\n", info.name, status));
                     }
