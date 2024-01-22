@@ -1,6 +1,6 @@
 use log::error;
 use serenity::FutureExt;
-use std::{mem::replace, sync::Arc};
+use std::{future::Future, mem::replace, sync::Arc};
 use tokio::sync::{
     mpsc::{channel, Receiver, Sender},
     Mutex,
@@ -21,16 +21,19 @@ impl<'a, T: 'a + Send> Watchdog<'a, T> {
         }
     }
 
-    pub fn append<F>(&mut self, new_task: F)
+    pub fn append<FN, FUT>(&mut self, task: FN)
     where
-        F: FnOnce(T) -> PinnedBoxedFuture<'a, T> + 'a + Send,
+        FN: FnOnce(T) -> FUT + Send + 'a,
+        FUT: Future<Output = T> + Send + 'a,
     {
         let previous_task = replace(
             &mut self.task,
             Box::pin(async { unreachable!("Undefined watchdog task") }),
         );
 
-        self.task = Box::pin(previous_task.then(new_task));
+        let task = previous_task.then(task);
+
+        self.task = Box::pin(task);
     }
 
     pub async fn subscribe(&self) -> Receiver<Arc<T>> {
@@ -47,7 +50,7 @@ impl<'a, T: 'a + Send> Watchdog<'a, T> {
 
             if let Err(e) = send_result {
                 error!(
-                    "Failed to send watchdog task result to one of the subscribers: {}",
+                    "Failed to send a watchdog task result to one of its subscribers: {}",
                     e
                 );
             }
