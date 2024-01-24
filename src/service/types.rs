@@ -90,7 +90,7 @@ pub enum StartupError {
     BackgroundTaskAlreadyRunning(String),
     #[error("Service {0} is not stopped")]
     ServiceNotStopped(String),
-    #[error("Failed to start service {0}")]
+    #[error("Service {0} failed to start")]
     FailedToStartService(String),
 }
 
@@ -100,6 +100,6 @@ pub enum ShutdownError {
     ServiceNotManaged(String),
     #[error("Service {0} is not started")]
     ServiceNotStarted(String),
-    #[error("Failed to stop service {0}")]
+    #[error("Service {0} failed to stop")]
     FailedToStopService(String),
 }
