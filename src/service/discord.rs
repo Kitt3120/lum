@@ -1,6 +1,6 @@
 use crate::setlock::SetLock;
 
-use super::{BoxedError, PinnedBoxedFutureResult, Priority, Service, ServiceInfo, ServiceManager};
+use super::{PinnedBoxedFutureResult, Priority, Service, ServiceInfo, ServiceManager};
 use log::{error, info};
 use serenity::{
     all::{GatewayIntents, Ready},
@@ -12,7 +12,7 @@ use serenity::{
     prelude::TypeMap,
     Client, Error,
 };
-use std::{any::Any, future::Future, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use tokio::{
     select, spawn,
     sync::{Mutex, Notify, RwLock},
@@ -163,10 +163,7 @@ struct EventHandler {
 
 impl EventHandler {
     pub fn new(client: Arc<RwLock<SetLock<Ready>>>, ready_notify: Arc<Notify>) -> Self {
-        Self {
-            client,
-            ready_notify,
-        }
+        Self { client, ready_notify }
     }
 }
 

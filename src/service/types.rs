@@ -88,8 +88,18 @@ pub enum StartupError {
     ServiceNotManaged(String),
     #[error("Service {0} already has a background task running")]
     BackgroundTaskAlreadyRunning(String),
-    #[error("Service {0} is already running")]
-    ServiceAlreadyRunning(String),
+    #[error("Service {0} is not stopped")]
+    ServiceNotStopped(String),
     #[error("Failed to start service {0}")]
     FailedToStartService(String),
+}
+
+#[derive(Debug, Error)]
+pub enum ShutdownError {
+    #[error("Service {0} is not managed by this Service Manager")]
+    ServiceNotManaged(String),
+    #[error("Service {0} is not started")]
+    ServiceNotStarted(String),
+    #[error("Failed to stop service {0}")]
+    FailedToStopService(String),
 }
