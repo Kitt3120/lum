@@ -57,10 +57,10 @@ impl Service for DiscordService {
 
     fn start(&mut self, _service_manager: Arc<ServiceManager>) -> PinnedBoxedFutureResult<'_, ()> {
         Box::pin(async move {
+            let client_ready_notify = Arc::new(Notify::new());
+
             let framework = StandardFramework::new();
             framework.configure(Configuration::new().prefix("!"));
-
-            let client_ready_notify = Arc::new(Notify::new());
 
             let mut client = Client::builder(self.discord_token.as_str(), GatewayIntents::all())
                 .framework(framework)
@@ -124,9 +124,26 @@ impl Service for DiscordService {
                 result?;
             }
 
-            info!("Discord client stopped");
             Ok(())
         })
+    }
+
+    fn task<'a>(&self) -> Option<PinnedBoxedFutureResult<'a, ()>> {
+        Some(Box::pin(async move {
+            let mut i = 0;
+            loop {
+                sleep(Duration::from_secs(1)).await;
+                if i < 5 {
+                    i += 1;
+                    info!("Wohoo!");
+                } else {
+                    info!("Bye!");
+                    break;
+                }
+            }
+
+            Err("Sheesh".into())
+        }))
     }
 }
 
@@ -145,10 +162,7 @@ struct EventHandler {
 
 impl EventHandler {
     pub fn new(client: Arc<RwLock<SetLock<Ready>>>, ready_notify: Arc<Notify>) -> Self {
-        Self {
-            client,
-            ready_notify,
-        }
+        Self { client, ready_notify }
     }
 }
 
