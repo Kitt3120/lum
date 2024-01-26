@@ -32,7 +32,8 @@ impl ServiceInfo {
     }
 
     pub async fn set_status(&self, status: Status) {
-        *(self.status.write().await) = status
+        let mut lock = self.status.write().await;
+        *(lock) = status
     }
 }
 

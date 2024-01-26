@@ -9,7 +9,7 @@ use tokio::{
 };
 use super::{
     service::Service,
-    types::{OverallStatus, PinnedBoxedFuture, Priority, StartupError, Status},
+    types::{OverallStatus, PinnedBoxedFuture, Priority, ShutdownError, StartupError, Status},
 };
 
 #[derive(Default)]
@@ -94,76 +94,54 @@ impl ServiceManager {
     pub async fn start_service(&self, service: Arc<RwLock<dyn Service>>) -> Result<(), StartupError> {
         let service_lock = service.read().await;
 
-        self.check_is_service_managed(&service_lock).await?;
-        self.check_no_known_background_task(&service_lock).await?;
-        self.check_is_service_stopped(&service_lock).await?;
+        let service_id = service_lock.info().id.clone();
+
+        if !self.manages_service(&service_id).await {
+            return Err(StartupError::ServiceNotManaged(service_id));
+        }
+
+        if !self.is_service_stopped(&service_lock).await {
+            return Err(StartupError::ServiceNotStopped(service_id));
+        }
+
+        if self.has_background_task_running(&service_lock).await {
+            return Err(StartupError::BackgroundTaskAlreadyRunning(service_id));
+        }
         
         drop(service_lock);
         let mut service_lock = service.write().await;
 
-        let mut status = service_lock.info().status.write().await;
-        *status = Status::Starting;
-        drop(status);
-
+        service_lock.info().set_status(Status::Starting).await;
         self.init_service(&mut service_lock).await?;
         self.start_background_task(&service_lock, Arc::clone(&service)).await;
+
+        info!("Started service {}", service_lock.info().name);
         
         Ok(())
     }
 
-    pub async fn stop_service(&self, service: Arc<RwLock<dyn Service>>) {
-        if !self.manages_service(&service.read().await.info().id).await {
-            let service = service.read().await;
-            warn!(
-                "Tried to stop service {} ({}), but it's not managed by this Service Manager. Ignoring stop request.",
-                service.info().name,
-                service.info().id
-            );
-            return;
+    pub async fn stop_service(&self, service: Arc<RwLock<dyn Service>>) -> Result<(), ShutdownError> {
+        let service_lock = service.read().await;
+
+        if !(self.manages_service(service_lock.info().id.as_str()).await) {
+            return Err(ShutdownError::ServiceNotManaged(service_lock.info().id.clone()));
         }
 
-        let mut service = service.write().await;
-
-        let mut status = service.info().status.write().await;
-        if !matches!(&*status, Status::Started) {
-            warn!(
-                "Tried to stop service {} while it was in state {}. Ignoring stop request.",
-                service.info().name,
-                status
-            );
-            return;
+        if !self.is_service_started(&service_lock).await {
+            return Err(ShutdownError::ServiceNotStarted(service_lock.info().id.clone()));
         }
-        *status = Status::Stopping;
-        drop(status);
 
-        let stop = service.stop();
+        self.stop_background_task(&service_lock).await;
 
-        let duration = Duration::from_secs(10); //TODO: Add to config instead of hardcoding
-        let timeout_result = timeout(duration, stop);
+        drop(service_lock);
+        let mut service_lock = service.write().await;
 
-        match timeout_result.await {
-            Ok(stop_result) => match stop_result {
-                Ok(()) => {
-                    info!("Stopped service: {}", service.info().name);
-                    service.info().set_status(Status::Stopped).await;
-                }
-                Err(error) => {
-                    error!("Failed to stop service {}: {}", service.info().name, error);
-                    service.info().set_status(Status::FailedToStop(error)).await;
-                }
-            },
-            Err(error) => {
-                error!(
-                    "Failed to stop service {}: Timeout of {} seconds reached.",
-                    service.info().name,
-                    duration.as_secs()
-                );
-                service
-                    .info()
-                    .set_status(Status::FailedToStop(Box::new(error)))
-                    .await;
-            }
-        }
+        service_lock.info().set_status(Status::Stopping).await;
+        self.shutdown_service(&mut service_lock).await?;
+
+        info!("Stopped service {}", service_lock.info().name);
+       
+        Ok(())
     }
 
     pub async fn start_services(&self) -> Vec<Result<(), StartupError>> {
@@ -176,10 +154,14 @@ impl ServiceManager {
         results
     }
 
-    pub async fn stop_services(&self) {
+    pub async fn stop_services(&self) -> Vec<Result<(), ShutdownError>> {
+        let mut results = Vec::new();
+
         for service in &self.services {
-            self.stop_service(Arc::clone(service)).await;
+            results.push(self.stop_service(Arc::clone(service)).await);
         }
+
+        results
     }
 
     pub async fn get_service<T>(&self) -> Option<Arc<RwLock<T>>>
@@ -297,46 +279,30 @@ impl ServiceManager {
         })
     }
 
-    // Helper methods for start_service
+    // Helper methods for start_service and stop_service
 
-    async fn check_is_service_managed(
+    async fn has_background_task_running(
         &self,
         service: &RwLockReadGuard<'_, dyn Service>,
-    ) -> Result<(), StartupError> {
-        let service_id = service.info().id.clone();
-        let manages_service = self.manages_service(&service_id).await;
-
-        match manages_service {
-            true => Ok(()),
-            false => Err(StartupError::ServiceNotManaged(service_id)),
-        }
-    }
-
-    async fn check_no_known_background_task(
-        &self,
-        service: &RwLockReadGuard<'_, dyn Service>,
-    ) -> Result<(), StartupError> {
+    ) -> bool {
         let tasks = self.background_tasks.read().await;
-        let is_background_task_running = tasks.contains_key(service.info().id.as_str());
-
-        match is_background_task_running {
-            true => Err(StartupError::BackgroundTaskAlreadyRunning(
-                service.info().id.clone(),
-            )),
-            false => Ok(()),
-        }
+        tasks.contains_key(service.info().id.as_str())
     }
 
-    async fn check_is_service_stopped(
+    async fn is_service_started(
         &self,
         service: &RwLockReadGuard<'_, dyn Service>,
-    ) -> Result<(), StartupError> {
+    ) -> bool {
         let status = service.info().status.read().await;
+        matches!(&*status, Status::Started)
+    }
 
-        match &*status {
-            Status::Stopped => Ok(()),
-            _ => Err(StartupError::ServiceNotStopped(service.info().id.clone())),
-        }
+    async fn is_service_stopped(
+        &self,
+        service: &RwLockReadGuard<'_, dyn Service>,
+    ) -> bool {
+        let status = service.info().status.read().await;
+        matches!(&*status, Status::Stopped)
     }
 
     async fn init_service(
@@ -371,18 +337,47 @@ impl ServiceManager {
         Ok(())
     }
 
+    async fn shutdown_service(
+        &self,
+        service: &mut RwLockWriteGuard<'_, dyn Service>,
+    ) -> Result<(), ShutdownError> {
+        //TODO: Add to config instead of hardcoding duration
+        let stop = service.stop();
+        let timeout_result = timeout(Duration::from_secs(10), stop).await;
+
+        match timeout_result {
+            Ok(stop_result) => match stop_result {
+                Ok(()) => {
+                    service.info().set_status(Status::Stopped).await;
+                }
+                Err(error) => {
+                    service.info().set_status(Status::FailedToStop(error)).await;
+                    return Err(ShutdownError::FailedToStopService(service.info().id.clone()));
+                }
+            },
+            Err(error) => {
+                service
+                    .info()
+                    .set_status(Status::FailedToStop(Box::new(error)))
+                    .await;
+                return Err(ShutdownError::FailedToStopService(service.info().id.clone()));
+            }
+        }
+
+        Ok(())
+    }
+
     async fn start_background_task(&self, service_lock: &RwLockWriteGuard<'_, dyn Service>, service: Arc<RwLock<dyn Service>>) {
         let task = service_lock.task();
         if let Some(task) = task {
-            let service_clone = Arc::clone(&service);
             let mut watchdog = Watchdog::new(task);
     
             watchdog.append(|result| async move {
-                let service = service_clone;
+                let service = service;
 
                 /*
                     We technically only need a read lock here, but we want to immediately stop
-                    otherservices from accessing the service, so we acquire a write lock instead.
+                    other services from accessing the service, so we acquire a write lock instead.
                 */
                 let service = service.write().await;
 
@@ -422,12 +417,16 @@ impl ServiceManager {
             self.background_tasks
                 .write()
                 .await
-                .insert(service.read().await.info().id.clone(), join_handle);
+                .insert(service_lock.info().id.clone(), join_handle);
+        }
+    }
 
-            info!(
-                "Started background task for service {}",
-                service.read().await.info().name
-            );
+    async fn stop_background_task(&self, service_lock: &RwLockReadGuard<'_, dyn Service>) {
+        if self.has_background_task_running(service_lock).await {
+            let mut tasks_lock = self.background_tasks.write().await;
+            let task = tasks_lock.get(service_lock.info().id.as_str()).unwrap();
+            task.abort();
+            tasks_lock.remove(service_lock.info().id.as_str());
         }
     }
 }

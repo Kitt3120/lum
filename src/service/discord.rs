@@ -57,10 +57,10 @@ impl Service for DiscordService {
 
     fn start(&mut self, _service_manager: Arc<ServiceManager>) -> PinnedBoxedFutureResult<'_, ()> {
         Box::pin(async move {
+            let client_ready_notify = Arc::new(Notify::new());
+
             let framework = StandardFramework::new();
             framework.configure(Configuration::new().prefix("!"));
-
-            let client_ready_notify = Arc::new(Notify::new());
 
             let mut client = Client::builder(self.discord_token.as_str(), GatewayIntents::all())
                 .framework(framework)
@@ -124,7 +124,6 @@ impl Service for DiscordService {
                 result?;
             }
 
-            info!("Discord client stopped");
             Ok(())
         })
     }
