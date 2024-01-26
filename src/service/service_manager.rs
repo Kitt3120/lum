@@ -7,7 +7,6 @@ use tokio::{
     task::JoinHandle,
     time::timeout,
 };
-
 use super::{
     service::Service,
     types::{OverallStatus, PinnedBoxedFuture, Priority, StartupError, Status},
@@ -98,7 +97,7 @@ impl ServiceManager {
         self.check_is_service_managed(&service_lock).await?;
         self.check_no_known_background_task(&service_lock).await?;
         self.check_is_service_stopped(&service_lock).await?;
-
+        
         drop(service_lock);
         let mut service_lock = service.write().await;
 
@@ -106,69 +105,9 @@ impl ServiceManager {
         *status = Status::Starting;
         drop(status);
 
-        self.boot_service(&mut service_lock).await?;
-
-        // Start the background task if one is defined
-        let task = service_lock.task();
-        drop(service_lock);
-
-        if let Some(task) = task {
-            let service_clone = Arc::clone(&service);
-            let mut watchdog = Watchdog::new(task);
-            
-            watchdog.append(|result| async move {
-                let service = service_clone;
-
-                /*
-                    We technically only need a read lock here, but we want to immediately stop
-                    otherservices from accessing the service, so we acquire a write lock instead.
-                */
-                let service = service.write().await;
-
-                match result {
-                    Ok(()) => {
-                        error!(
-                            "Background task of service {} ended unexpectedly! Service will be marked as failed.",
-                            service.info().name
-                        );
-                        
-                        service
-                            .info()
-                            .set_status(Status::RuntimeError("Background task ended unexpectedly!".into()))
-                            .await;
-                    }
-                    
-                    Err(error) => {
-                        error!(
-                            "Background task of service {} ended with error: {}! Service will be marked as failed.",
-                            service.info().name,
-                            error
-                        );
-
-                        service
-                            .info()
-                            .set_status(Status::RuntimeError(
-                                format!("Background task ended with error: {}", error).into(),
-                            ))
-                            .await;
-                    }
-                }
-                Ok(())
-            });
-
-            let join_handle = spawn(watchdog.run());
-
-            self.background_tasks
-                .write()
-                .await
-                .insert(service.read().await.info().id.clone(), join_handle);
-
-            info!(
-                "Started background task for service {}",
-                service.read().await.info().name
-            );
-        }
-
+        self.init_service(&mut service_lock).await?;
+        self.start_background_task(&service_lock, Arc::clone(&service)).await;
+        
         Ok(())
     }
 
@@ -400,7 +339,7 @@ impl ServiceManager {
         }
     }
 
-    async fn boot_service(
+    async fn init_service(
         &self,
         service: &mut RwLockWriteGuard<'_, dyn Service>,
     ) -> Result<(), StartupError> {
@@ -430,6 +369,66 @@ impl ServiceManager {
         }
 
         Ok(())
+    }
+
+    async fn start_background_task(&self, service_lock: &RwLockWriteGuard<'_, dyn Service>, service: Arc<RwLock<dyn Service>>) {
+        let task = service_lock.task();
+        if let Some(task) = task {
+            let service_clone = Arc::clone(&service);
+            let mut watchdog = Watchdog::new(task);
+    
+            watchdog.append(|result| async move {
+                let service = service_clone;
+
+                /*
+                    We technically only need a read lock here, but we want to immediately stop
+                    otherservices from accessing the service, so we acquire a write lock instead.
+                */
+                let service = service.write().await;
+
+                match result {
+                    Ok(()) => {
+                        error!(
+                            "Background task of service {} ended unexpectedly! Service will be marked as failed.",
+                            service.info().name
+                        );
+                
+                        service
+                            .info()
+                            .set_status(Status::RuntimeError("Background task ended unexpectedly!".into()))
+                            .await;
+                    }
+            
+                    Err(error) => {
+                        error!(
+                            "Background task of service {} ended with error: {}. Service will be marked as failed.",
+                            service.info().name,
+                            error
+                        );
+
+                        service
+                            .info()
+                            .set_status(Status::RuntimeError(
+                                format!("Background task ended with error: {}", error).into(),
+                            ))
+                            .await;
+                    }
+                }
+                Ok(())
+            });
+
+            let join_handle = spawn(watchdog.run());
+
+            self.background_tasks
+                .write()
+                .await
+                .insert(service.read().await.info().id.clone(), join_handle);
+
+            info!(
+                "Started background task for service {}",
+                service.read().await.info().name
+            );
+        }
     }
 }
 
