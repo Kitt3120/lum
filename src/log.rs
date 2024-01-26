@@ -25,7 +25,7 @@ pub fn setup() -> Result<(), SetLoggerError> {
     fern::Dispatch::new()
         .format(move |out, message, record| {
             out.finish(format_args!(
-                "[{} {: <25} {: <5}] {}",
+                "[{} {: <30} {: <5}] {}",
                 humantime::format_rfc3339_seconds(SystemTime::now()),
                 record.target(),
                 colors.color(record.level()),
