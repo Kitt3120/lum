@@ -18,7 +18,7 @@ pub struct ServiceInfo {
     pub name: String,
     pub priority: Priority,
 
-    pub status: Arc<RwLock<Status>>,
+    status: Arc<RwLock<Status>>,
 }
 
 impl ServiceInfo {
@@ -29,6 +29,12 @@ impl ServiceInfo {
             priority,
             status: Arc::new(RwLock::new(Status::Stopped)),
         }
+    }
+
+    pub async fn get_status(&self) -> Status {
+        let lock = self.status.read().await;
+        let clone = lock.clone();
+        clone
     }
 
     pub async fn set_status(&self, status: Status) {

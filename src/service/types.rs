@@ -10,15 +10,15 @@ pub type BoxedFutureResult<'a, T> = BoxedFuture<'a, Result<T, BoxedError>>;
 pub type PinnedBoxedFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub type PinnedBoxedFutureResult<'a, T> = PinnedBoxedFuture<'a, Result<T, BoxedError>>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Status {
     Started,
     Stopped,
     Starting,
     Stopping,
-    FailedToStart(BoxedError), //TODO: Test out if it'd be better to use a String instead
-    FailedToStop(BoxedError),
-    RuntimeError(BoxedError),
+    FailedToStart(String),
+    FailedToStop(String),
+    RuntimeError(String),
 }
 
 impl Display for Status {
