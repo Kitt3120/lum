@@ -33,8 +33,7 @@ impl ServiceInfo {
 
     pub async fn get_status(&self) -> Status {
         let lock = self.status.read().await;
-        let clone = lock.clone();
-        clone
+        lock.clone()
     }
 
     pub async fn set_status(&self, status: Status) {
