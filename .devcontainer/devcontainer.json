@@ -1,0 +1,22 @@
+{
+	"name": "Lum",
+	"dockerComposeFile": "docker-compose.yml",
+	"service": "app",
+	"workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+
+	// Comment out the extensions you do not want to install
+	"customizations":{
+		"vscode": {
+			"extensions": [
+				"github.copilot-chat",
+				"github.copilot",
+				"JScearcy.rust-doc-viewer",
+				"swellaby.vscode-rust-test-adapter",
+				"Gruntfuggly.todo-tree",
+				"usernamehw.errorlens"
+			]
+		}
+	},
+
+	"remoteUser": "vscode"
+}
