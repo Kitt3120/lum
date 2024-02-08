@@ -5,6 +5,7 @@ use std::time::SystemTime;
 
 pub mod bot;
 pub mod config;
+pub mod event;
 pub mod log;
 pub mod service;
 pub mod setlock;

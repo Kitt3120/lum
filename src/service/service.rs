@@ -7,6 +7,8 @@ use std::{
 use downcast_rs::{impl_downcast, DowncastSync};
 use tokio::sync::RwLock;
 
+use crate::event::Event;
+
 use super::{
     service_manager::ServiceManager,
     types::{PinnedBoxedFuture, PinnedBoxedFutureResult, Priority, Status},
@@ -19,6 +21,7 @@ pub struct ServiceInfo {
     pub priority: Priority,
 
     status: Arc<RwLock<Status>>,
+    pub status_changed: Event<Status>,
 }
 
 impl ServiceInfo {
@@ -28,6 +31,7 @@ impl ServiceInfo {
             name: name.to_string(),
             priority,
             status: Arc::new(RwLock::new(Status::Stopped)),
+            status_changed: Event::new(),
         }
     }
 
@@ -38,7 +42,13 @@ impl ServiceInfo {
 
     pub async fn set_status(&self, status: Status) {
         let mut lock = self.status.write().await;
-        *(lock) = status
+
+        let previous_status = lock.clone();
+        *(lock) = status;
+
+        if previous_status != *lock {
+            self.status_changed.dispatch(lock.clone()).await;
+        }
     }
 }
 
