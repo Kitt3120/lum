@@ -1,5 +1,5 @@
 pub mod discord;
-pub mod service;
+pub mod service; // Will be fixed when lum gets seperated into multiple workspaces
 pub mod service_manager;
 pub mod types;
 pub mod watchdog;
