@@ -31,7 +31,7 @@ impl ServiceInfo {
             name: name.to_string(),
             priority,
             status: Arc::new(RwLock::new(Status::Stopped)),
-            status_changed: Event::new(),
+            status_changed: Event::new(format!("{}-status-changed", name).as_str()),
         }
     }
 
@@ -47,7 +47,7 @@ impl ServiceInfo {
         *(lock) = status;
 
         if previous_status != *lock {
-            self.status_changed.dispatch(lock.clone()).await;
+            let _ = self.status_changed.dispatch(lock.clone()).await;
         }
     }
 }
