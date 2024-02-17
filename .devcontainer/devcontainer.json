@@ -1,5 +1,5 @@
 {
-	"name": "Lum",
+	"name": "lum",
 	"dockerComposeFile": "docker-compose.yml",
 	"service": "app",
 	"workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
