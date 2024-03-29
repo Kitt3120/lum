@@ -31,7 +31,7 @@ impl ServiceInfo {
             name: name.to_string(),
             priority,
             status: Arc::new(RwLock::new(Status::Stopped)),
-            status_changed: Event::new(format!("{}-status-changed", name).as_str()),
+            status_changed: Event::new(format!("{}-status-changed", name).as_str(), false),
         }
     }
 
