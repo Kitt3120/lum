@@ -1,4 +1,4 @@
-use crate::{service::Watchdog, setlock::SetLock};
+use crate::{service::Watchdog, setlock::{SetLock, SetLockError}};
 use log::{error, info, warn};
 use std::{collections::HashMap, fmt::Display, mem, sync::Arc, time::Duration};
 use tokio::{
@@ -58,11 +58,15 @@ impl ServiceManagerBuilder {
         };
 
         let self_arc = Arc::new(service_manager);
+        let self_arc_clone = Arc::clone(&self_arc);
 
-        match self_arc.arc.write().await.set(Arc::clone(&self_arc)) {
-            Ok(()) => {}
-            Err(err) => {
-                panic!("Failed to set ServiceManager in SetLock for self_arc: {}", err);
+        let result = self_arc_clone.arc.write().await.set(Arc::clone(&self_arc_clone));
+
+        if let Err(err) = result {
+            match err {
+                SetLockError::AlreadySet => {
+                    unreachable!("Unable to set ServiceManager's self-arc in ServiceManagerBuilder because it was already set. This should never happen. How did you...?");
+                }
             }
         }
 
@@ -82,8 +86,10 @@ impl ServiceManager {
     }
 
     pub async fn manages_service(&self, service_id: &str) -> bool {
-        for registered_service in self.services.iter() {
-            if registered_service.read().await.info().id == service_id {
+        for service in self.services.iter() {
+            let service_lock = service.read().await;
+
+            if service_lock.info().id == service_id {
                 return true;
             }
         }
@@ -93,7 +99,6 @@ impl ServiceManager {
 
     pub async fn start_service(&self, service: Arc<RwLock<dyn Service>>) -> Result<(), StartupError> {
         let service_lock = service.read().await;
-
         let service_id = service_lock.info().id.clone();
 
         if !self.manages_service(&service_id).await {
@@ -104,7 +109,7 @@ impl ServiceManager {
             return Err(StartupError::ServiceNotStopped(service_id));
         }
 
-        if self.has_background_task_running(&service_lock).await {
+        if self.has_background_task_registered(&service_id).await {
             return Err(StartupError::BackgroundTaskAlreadyRunning(service_id));
         }
         
@@ -112,6 +117,7 @@ impl ServiceManager {
         let mut service_lock = service.write().await;
 
         service_lock.info().set_status(Status::Starting).await;
+
         self.init_service(&mut service_lock).await?;
         self.start_background_task(&service_lock, Arc::clone(&service)).await;
 
@@ -122,13 +128,14 @@ impl ServiceManager {
 
     pub async fn stop_service(&self, service: Arc<RwLock<dyn Service>>) -> Result<(), ShutdownError> {
         let service_lock = service.read().await;
+        let service_id = service_lock.info().id.clone();
 
-        if !(self.manages_service(service_lock.info().id.as_str()).await) {
-            return Err(ShutdownError::ServiceNotManaged(service_lock.info().id.clone()));
+        if !(self.manages_service(&service_id).await) {
+            return Err(ShutdownError::ServiceNotManaged(service_id));
         }
 
         if !self.is_service_started(&service_lock).await {
-            return Err(ShutdownError::ServiceNotStarted(service_lock.info().id.clone()));
+            return Err(ShutdownError::ServiceNotStarted(service_id));
         }
 
         self.stop_background_task(&service_lock).await;
@@ -281,12 +288,12 @@ impl ServiceManager {
 
     // Helper methods for start_service and stop_service
 
-    async fn has_background_task_running(
+    async fn has_background_task_registered(
         &self,
-        service: &RwLockReadGuard<'_, dyn Service>,
+        service_id: &str,
     ) -> bool {
         let tasks = self.background_tasks.read().await;
-        tasks.contains_key(service.info().id.as_str())
+        tasks.contains_key(service_id)
     }
 
     async fn is_service_started(
@@ -368,13 +375,15 @@ impl ServiceManager {
     }
 
     async fn start_background_task(&self, service_lock: &RwLockWriteGuard<'_, dyn Service>, service: Arc<RwLock<dyn Service>>) {
+        if self.has_background_task_registered(&service_lock.info().id).await {
+            return;
+        }
+
         let task = service_lock.task();
         if let Some(task) = task {
             let mut watchdog = Watchdog::new(task);
     
             watchdog.append(|result| async move {
-                let service = service;
-
                 /*
                     We technically only need a read lock here, but we want to immediately stop
                     other services from accessing the service, so we acquire a write lock instead.
@@ -390,7 +399,7 @@ impl ServiceManager {
                 
                         service
                             .info()
-                            .set_status(Status::RuntimeError("Background task ended unexpectedly!".into()))
+                            .set_status(Status::RuntimeError("Background task ended unexpectedly!".to_string()))
                             .await;
                     }
             
@@ -422,12 +431,14 @@ impl ServiceManager {
     }
 
     async fn stop_background_task(&self, service_lock: &RwLockReadGuard<'_, dyn Service>) {
-        if self.has_background_task_running(service_lock).await {
-            let mut tasks_lock = self.background_tasks.write().await;
+        if !self.has_background_task_registered(&service_lock.info().id).await {
+            return;
+        }
+
+        let mut tasks_lock = self.background_tasks.write().await;
             let task = tasks_lock.get(service_lock.info().id.as_str()).unwrap();
             task.abort();
             tasks_lock.remove(service_lock.info().id.as_str());
-        }
     }
 }
 
