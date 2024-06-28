@@ -1,4 +1,6 @@
 pub mod discord;
+// TODO: Used for downcast_rs. Maybe this can be removed when updating the crate.
+#[allow(clippy::multiple_bound_locations)]
 pub mod service; // Will be fixed when lum gets seperated into multiple workspaces
 pub mod service_manager;
 pub mod types;
