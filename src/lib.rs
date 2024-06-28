@@ -17,7 +17,6 @@ pub fn is_debug() -> bool {
 pub async fn run(mut bot: Bot) {
     if !log::is_set_up() {
         eprintln!("Logger has not been set up!\n{} will exit.", bot.name);
-
         return;
     }
 
@@ -32,7 +31,6 @@ pub async fn run(mut bot: Bot) {
                 "Error getting elapsed startup time: {}\n{} will exit.",
                 error, bot.name
             );
-
             return;
         }
     };
@@ -50,14 +48,7 @@ pub async fn run(mut bot: Bot) {
     info!("{} is alive", bot.name,);
 
     //TODO: Add CLI commands
-    match tokio::signal::ctrl_c().await {
-        Ok(_) => {
-            info!("Received SIGINT, {} will now shut down", bot.name);
-        }
-        Err(error) => {
-            panic!("Error receiving SIGINT: {}\n{} will exit.", error, bot.name);
-        }
-    }
+    let exit_reason = bot.join().await;
 
     bot.stop().await;
 

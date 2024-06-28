@@ -20,6 +20,7 @@ use tokio::{
     time::sleep,
 };
 
+//TODO: Restructure
 pub struct DiscordService {
     info: ServiceInfo,
     discord_token: String,

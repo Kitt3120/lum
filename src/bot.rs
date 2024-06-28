@@ -1,8 +1,14 @@
 use std::sync::Arc;
 
+use log::info;
 use tokio::sync::RwLock;
 
 use crate::service::{PinnedBoxedFuture, Service, ServiceManager, ServiceManagerBuilder};
+
+pub enum ExitReason {
+    SIGINT,
+    EssentialServiceFailed(String),
+}
 
 pub struct BotBuilder {
     name: String,
@@ -63,5 +69,18 @@ impl Bot {
             self.service_manager.stop_services().await;
             //TODO: Potential for further deinitialization here, like modules
         })
+    }
+
+    pub async fn join(&self) -> ExitReason {
+        match tokio::signal::ctrl_c().await {
+            Ok(_) => {
+                info!("Received SIGINT, {} will now shut down", self.name);
+            }
+            Err(error) => {
+                panic!("Error receiving SIGINT: {}\n{} will exit.", error, self.name);
+            }
+        }
+
+        ExitReason::SIGINT
     }
 }
