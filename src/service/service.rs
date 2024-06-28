@@ -21,7 +21,8 @@ pub struct ServiceInfo {
     pub priority: Priority,
 
     status: Arc<RwLock<Status>>,
-    pub status_changed: Event<Status>,
+
+    pub on_status_change: Event<Status>,
 }
 
 impl ServiceInfo {
@@ -31,7 +32,7 @@ impl ServiceInfo {
             name: name.to_string(),
             priority,
             status: Arc::new(RwLock::new(Status::Stopped)),
-            status_changed: Event::new(format!("{}-status-changed", name).as_str(), false),
+            on_status_change: Event::new_with_defaults(format!("{}::on_status_change", name).as_str()),
         }
     }
 
@@ -42,13 +43,14 @@ impl ServiceInfo {
 
     pub async fn set_status(&self, status: Status) {
         let mut lock = self.status.write().await;
-
         let previous_status = lock.clone();
-        *(lock) = status;
 
-        if previous_status != *lock {
-            let _ = self.status_changed.dispatch(lock.clone()).await;
+        if previous_status == status {
+            return;
         }
+
+        *(lock) = status;
+        let _ = self.on_status_change.dispatch(lock.clone()).await;
     }
 }
 

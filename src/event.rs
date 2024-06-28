@@ -17,16 +17,26 @@ pub enum EventError<T> {
 
 pub struct Event<T> {
     pub name: String,
+
     subscribers: Mutex<Vec<Subscriber<T>>>,
+    log_on_error: bool,
     remove_subscriber_on_error: bool,
 }
 
 impl<T> Event<T> {
-    pub fn new(name: &str, remove_subscriber_on_error: bool) -> Self {
+    pub fn new(name: &str, log_on_error: bool, remove_subscriber_on_error: bool) -> Self {
         Self {
             name: name.to_string(),
             subscribers: Mutex::new(Vec::new()),
+            log_on_error,
             remove_subscriber_on_error,
+        }
+    }
+
+    pub fn new_with_defaults(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            ..Default::default()
         }
     }
 
@@ -65,27 +75,50 @@ impl<T> Event<T> {
                     let result = sender.send(data).await;
 
                     if let Err(err) = result {
-                        log::error!("Event \"{}\" failed to dispatch data to receiver {}: {}. Receiver will be unregistered from event.", self.name, index, err);
+                        if self.log_on_error {
+                            log::error!(
+                                "Event \"{}\" failed to dispatch data to receiver {}: {}.",
+                                self.name,
+                                index,
+                                err
+                            );
+                        }
+
+                        if self.remove_subscriber_on_error {
+                            log::error!("Receiver will be unregistered from event.");
+                            subscribers_to_remove.push(index);
+                        }
+
                         errors.push(EventError::ChannelSend(err));
-                        subscribers_to_remove.push(index);
                     }
                 }
+
                 Subscriber::Closure(closure) => {
                     let result = closure(data);
 
                     if let Err(err) = result {
-                        log::error!("Event \"{}\" failed to dispatch data to closure {}: {}. Closure will be unregistered from event.", self.name, index, err);
+                        if self.log_on_error {
+                            log::error!(
+                                "Event \"{}\" failed to dispatch data to closure {}: {}.",
+                                self.name,
+                                index,
+                                err
+                            );
+                        }
+
+                        if self.remove_subscriber_on_error {
+                            log::error!("Closure will be unregistered from event.");
+                            subscribers_to_remove.push(index);
+                        }
+
                         errors.push(EventError::Closure(err));
-                        subscribers_to_remove.push(index);
                     }
                 }
             }
         }
 
-        if self.remove_subscriber_on_error {
-            for index in subscribers_to_remove.into_iter().rev() {
-                subscribers.remove(index);
-            }
+        for index in subscribers_to_remove.into_iter().rev() {
+            subscribers.remove(index);
         }
 
         if errors.is_empty() {
@@ -98,7 +131,7 @@ impl<T> Event<T> {
 
 impl<T> Default for Event<T> {
     fn default() -> Self {
-        Self::new("Unnamed Event", false)
+        Self::new("Unnamed Event", true, false)
     }
 }
 

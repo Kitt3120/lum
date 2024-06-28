@@ -24,7 +24,6 @@ async fn main() {
         Ok(config) => config,
         Err(err) => {
             error!("Error reading config file: {}\n{} will exit.", err, BOT_NAME);
-
             return;
         }
     };

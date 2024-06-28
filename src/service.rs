@@ -8,6 +8,6 @@ pub use service::{Service, ServiceInfo};
 pub use service_manager::{ServiceManager, ServiceManagerBuilder};
 pub use types::{
     BoxedError, BoxedFuture, BoxedFutureResult, OverallStatus, PinnedBoxedFuture, PinnedBoxedFutureResult,
-    Priority, StartupError, Status,
+    Priority, ShutdownError, StartupError, Status,
 };
 pub use watchdog::Watchdog;
