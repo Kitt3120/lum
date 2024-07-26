@@ -7,7 +7,7 @@ use lum::{
     log,
     service::{discord::DiscordService, Service},
 };
-use tokio::sync::RwLock;
+use tokio::sync::Mutex;
 
 const BOT_NAME: &str = "Lum";
 
@@ -43,11 +43,11 @@ fn setup_logger() {
     }
 }
 
-fn initialize_services(config: &Config) -> Vec<Arc<RwLock<dyn Service>>> {
+fn initialize_services(config: &Config) -> Vec<Arc<Mutex<dyn Service>>> {
     //TODO: Add services
     //...
 
     let discord_service = DiscordService::new(config.discord_token.as_str());
 
-    vec![Arc::new(RwLock::new(discord_service))]
+    vec![Arc::new(Mutex::new(discord_service))]
 }

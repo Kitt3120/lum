@@ -7,7 +7,7 @@ use std::{
 use thiserror::Error;
 use tokio::sync::{
     mpsc::{channel, error::SendError, Receiver, Sender},
-    RwLock,
+    Mutex,
 };
 
 pub enum Subscriber<T> {
@@ -27,7 +27,7 @@ pub struct Event<T> {
     log_on_error: bool,
     remove_subscriber_on_error: bool,
 
-    subscribers: RwLock<Vec<Subscriber<T>>>,
+    subscribers: Mutex<Vec<Subscriber<T>>>,
 }
 
 impl<T> Event<T> {
@@ -36,18 +36,18 @@ impl<T> Event<T> {
             name: name.into(),
             log_on_error,
             remove_subscriber_on_error,
-            subscribers: RwLock::new(Vec::new()),
+            subscribers: Mutex::new(Vec::new()),
         }
     }
 
     pub async fn subscriber_count(&self) -> usize {
-        let subscribers = self.subscribers.read().await;
+        let subscribers = self.subscribers.lock().await;
         subscribers.len()
     }
 
     pub async fn open_channel(&self, buffer: usize) -> Receiver<Arc<T>> {
         let (sender, receiver) = channel(buffer);
-        let mut subscribers = self.subscribers.write().await;
+        let mut subscribers = self.subscribers.lock().await;
         subscribers.push(Subscriber::Channel(sender));
 
         receiver
@@ -57,7 +57,7 @@ impl<T> Event<T> {
         &self,
         closure: impl Fn(Arc<T>) -> Result<(), BoxedError> + Send + Sync + 'static,
     ) {
-        let mut subscribers = self.subscribers.write().await;
+        let mut subscribers = self.subscribers.lock().await;
         subscribers.push(Subscriber::Closure(Box::new(closure)));
     }
 
@@ -67,7 +67,7 @@ impl<T> Event<T> {
         let mut errors = Vec::new();
         let mut subscribers_to_remove = Vec::new();
 
-        let mut subscribers = self.subscribers.write().await;
+        let mut subscribers = self.subscribers.lock().await;
         for (index, subscriber) in subscribers.iter().enumerate() {
             let data = Arc::clone(&data);
 
@@ -154,7 +154,7 @@ impl<T> Debug for Event<T> {
             .field("name", &self.name)
             .field("log_on_error", &self.log_on_error)
             .field("remove_subscriber_on_error", &self.remove_subscriber_on_error)
-            .field("subscribers", &self.subscribers.blocking_read().len())
+            .field("subscribers", &self.subscribers.blocking_lock().len())
             .finish()
     }
 }

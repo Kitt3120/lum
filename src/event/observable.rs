@@ -1,4 +1,3 @@
-use log::{debug, info};
 use tokio::sync::Mutex;
 
 use super::{Event, EventError};

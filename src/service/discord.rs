@@ -24,7 +24,7 @@ use tokio::{
 pub struct DiscordService {
     info: ServiceInfo,
     discord_token: String,
-    pub ready: Arc<RwLock<SetLock<Ready>>>,
+    pub ready: Arc<Mutex<SetLock<Ready>>>,
     client_handle: Option<JoinHandle<Result<(), Error>>>,
     pub cache: SetLock<Arc<Cache>>,
     pub data: SetLock<Arc<RwLock<TypeMap>>>,
@@ -39,7 +39,7 @@ impl DiscordService {
         Self {
             info: ServiceInfo::new("lum_builtin_discord", "Discord", Priority::Essential),
             discord_token: discord_token.to_string(),
-            ready: Arc::new(RwLock::new(SetLock::new())),
+            ready: Arc::new(Mutex::new(SetLock::new())),
             client_handle: None,
             cache: SetLock::new(),
             data: SetLock::new(),
@@ -157,12 +157,12 @@ async fn convert_thread_result(client_handle: JoinHandle<Result<(), Error>>) -> 
 }
 
 struct EventHandler {
-    client: Arc<RwLock<SetLock<Ready>>>,
+    client: Arc<Mutex<SetLock<Ready>>>,
     ready_notify: Arc<Notify>,
 }
 
 impl EventHandler {
-    pub fn new(client: Arc<RwLock<SetLock<Ready>>>, ready_notify: Arc<Notify>) -> Self {
+    pub fn new(client: Arc<Mutex<SetLock<Ready>>>, ready_notify: Arc<Notify>) -> Self {
         Self { client, ready_notify }
     }
 }
@@ -171,7 +171,7 @@ impl EventHandler {
 impl client::EventHandler for EventHandler {
     async fn ready(&self, _ctx: Context, data_about_bot: Ready) {
         info!("Connected to Discord as {}", data_about_bot.user.tag());
-        if let Err(error) = self.client.write().await.set(data_about_bot) {
+        if let Err(error) = self.client.lock().await.set(data_about_bot) {
             error!("Failed to set client SetLock: {}", error);
             panic!("Failed to set client SetLock: {}", error);
         }
