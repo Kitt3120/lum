@@ -5,9 +5,8 @@ use std::{
 };
 
 use downcast_rs::{impl_downcast, DowncastSync};
-use tokio::sync::RwLock;
 
-use crate::event::Event;
+use crate::event::Observable;
 
 use super::{
     service_manager::ServiceManager,
@@ -20,9 +19,7 @@ pub struct ServiceInfo {
     pub name: String,
     pub priority: Priority,
 
-    status: Arc<RwLock<Status>>,
-
-    pub on_status_change: Event<Status>,
+    pub status: Observable<Status>,
 }
 
 impl ServiceInfo {
@@ -31,26 +28,8 @@ impl ServiceInfo {
             id: id.to_string(),
             name: name.to_string(),
             priority,
-            status: Arc::new(RwLock::new(Status::Stopped)),
-            on_status_change: Event::new_with_defaults(format!("{}::on_status_change", name).as_str()),
+            status: Observable::new(Status::Stopped, format!("{}_status_change", id)),
         }
-    }
-
-    pub async fn get_status(&self) -> Status {
-        let lock = self.status.read().await;
-        lock.clone()
-    }
-
-    pub async fn set_status(&self, status: Status) {
-        let mut lock = self.status.write().await;
-        let previous_status = lock.clone();
-
-        if previous_status == status {
-            return;
-        }
-
-        *(lock) = status;
-        let _ = self.on_status_change.dispatch(lock.clone()).await;
     }
 }
 
@@ -89,7 +68,7 @@ pub trait Service: DowncastSync {
     }
 
     fn is_available(&self) -> PinnedBoxedFuture<'_, bool> {
-        Box::pin(async move { matches!(&*(self.info().status.read().await), Status::Started) })
+        Box::pin(async move { matches!(self.info().status.get().await, Status::Started) })
     }
 }
 

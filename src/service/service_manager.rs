@@ -119,7 +119,7 @@ impl ServiceManager {
         drop(service_lock);
         let mut service_lock = service.write().await;
 
-        service_lock.info().set_status(Status::Starting).await;
+        service_lock.info().status.set(Status::Starting).await;
 
         self.init_service(&mut service_lock).await?;
         self.start_background_task(&service_lock, Arc::clone(&service))
@@ -147,7 +147,7 @@ impl ServiceManager {
         drop(service_lock);
         let mut service_lock = service.write().await;
 
-        service_lock.info().set_status(Status::Stopping).await;
+        service_lock.info().status.set(Status::Stopping).await;
         self.shutdown_service(&mut service_lock).await?;
 
         info!("Stopped service {}", service_lock.info().name);
@@ -214,7 +214,7 @@ impl ServiceManager {
         Box::pin(async move {
             for service in self.services.iter() {
                 let service = service.read().await;
-                let status = service.info().get_status().await;
+                let status = service.info().status.get().await;
 
                 if !matches!(status, Status::Started) {
                     return OverallStatus::Unhealthy;
@@ -240,7 +240,7 @@ impl ServiceManager {
                 let service = service.read().await;
                 let info = service.info();
                 let priority = &info.priority;
-                let status = info.get_status().await;
+                let status = info.status.get().await;
 
                 match status {
                     Status::Started | Status::Stopped => match priority {
@@ -304,12 +304,12 @@ impl ServiceManager {
     }
 
     async fn is_service_started(&self, service: &RwLockReadGuard<'_, dyn Service>) -> bool {
-        let status = service.info().get_status().await;
+        let status = service.info().status.get().await;
         matches!(status, Status::Started)
     }
 
     async fn is_service_stopped(&self, service: &RwLockReadGuard<'_, dyn Service>) -> bool {
-        let status = service.info().get_status().await;
+        let status = service.info().status.get().await;
         matches!(status, Status::Stopped)
     }
 
@@ -326,12 +326,13 @@ impl ServiceManager {
         match timeout_result {
             Ok(start_result) => match start_result {
                 Ok(()) => {
-                    service.info().set_status(Status::Started).await;
+                    service.info().status.set(Status::Started).await;
                 }
                 Err(error) => {
                     service
                         .info()
-                        .set_status(Status::FailedToStart(error.to_string()))
+                        .status
+                        .set(Status::FailedToStart(error.to_string()))
                         .await;
                     return Err(StartupError::FailedToStartService(service.info().id.clone()));
                 }
@@ -339,7 +340,8 @@ impl ServiceManager {
             Err(error) => {
                 service
                     .info()
-                    .set_status(Status::FailedToStart(error.to_string()))
+                    .status
+                    .set(Status::FailedToStart(error.to_string()))
                     .await;
                 return Err(StartupError::FailedToStartService(service.info().id.clone()));
             }
@@ -359,12 +361,13 @@ impl ServiceManager {
         match timeout_result {
             Ok(stop_result) => match stop_result {
                 Ok(()) => {
-                    service.info().set_status(Status::Stopped).await;
+                    service.info().status.set(Status::Stopped).await;
                 }
                 Err(error) => {
                     service
                         .info()
-                        .set_status(Status::FailedToStop(error.to_string()))
+                        .status
+                        .set(Status::FailedToStop(error.to_string()))
                         .await;
                     return Err(ShutdownError::FailedToStopService(service.info().id.clone()));
                 }
@@ -372,7 +375,8 @@ impl ServiceManager {
             Err(error) => {
                 service
                     .info()
-                    .set_status(Status::FailedToStop(error.to_string()))
+                    .status
+                    .set(Status::FailedToStop(error.to_string()))
                     .await;
                 return Err(ShutdownError::FailedToStopService(service.info().id.clone()));
             }
@@ -410,7 +414,8 @@ impl ServiceManager {
                 
                         service
                             .info()
-                            .set_status(Status::RuntimeError("Background task ended unexpectedly!".to_string()))
+                            .status
+                            .set(Status::RuntimeError("Background task ended unexpectedly!".to_string()))
                             .await;
                     }
             
@@ -423,7 +428,8 @@ impl ServiceManager {
 
                         service
                             .info()
-                            .set_status(Status::RuntimeError(
+                            .status
+                            .set(Status::RuntimeError(
                                 format!("Background task ended with error: {}", error),
                             ))
                             .await;
