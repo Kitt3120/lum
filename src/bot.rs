@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use log::info;
-use tokio::sync::RwLock;
+use tokio::sync::Mutex;
 
 use crate::service::{PinnedBoxedFuture, Service, ServiceManager, ServiceManagerBuilder};
 
@@ -23,13 +23,13 @@ impl BotBuilder {
         }
     }
 
-    pub async fn with_service(mut self, service: Arc<RwLock<dyn Service>>) -> Self {
+    pub async fn with_service(mut self, service: Arc<Mutex<dyn Service>>) -> Self {
         self.service_manager = self.service_manager.with_service(service).await; // The ServiceManagerBuilder itself will warn when adding a service multiple times
 
         self
     }
 
-    pub async fn with_services(mut self, services: Vec<Arc<RwLock<dyn Service>>>) -> Self {
+    pub async fn with_services(mut self, services: Vec<Arc<Mutex<dyn Service>>>) -> Self {
         for service in services {
             self.service_manager = self.service_manager.with_service(service).await;
         }
