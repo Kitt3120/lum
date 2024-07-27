@@ -4,22 +4,12 @@ use std::{
     fmt::{self, Debug, Formatter},
     sync::Arc,
 };
-use thiserror::Error;
-use tokio::sync::{
-    mpsc::{channel, error::SendError, Receiver},
-    Mutex,
-};
+use tokio::sync::{mpsc::channel, Mutex};
 
 use super::{
     subscriber::{ReceiverSubscription, Subscription},
-    Callback, Subscriber,
+    Callback, DispatchError, Subscriber,
 };
-
-#[derive(Debug, Error)]
-pub enum EventError<T> {
-    ChannelSend(SendError<Arc<T>>),
-    Closure(BoxedError),
-}
 
 pub struct Event<T> {
     pub name: String,
@@ -82,7 +72,7 @@ impl<T> Event<T> {
         subscription
     }
 
-    pub async fn dispatch(&self, data: T) -> Result<(), Vec<EventError<T>>> {
+    pub async fn dispatch(&self, data: T) -> Result<(), Vec<DispatchError<T>>> {
         let data = Arc::new(data);
 
         let mut errors = Vec::new();
@@ -92,56 +82,26 @@ impl<T> Event<T> {
         for (index, subscriber) in subscribers.iter().enumerate() {
             let data = Arc::clone(&data);
 
-            match &subscriber.callback {
-                Callback::Channel(sender) => {
-                    let result = sender.send(data).await;
-
-                    if let Err(err) = result {
-                        if self.log_on_error {
-                            log::error!(
-                                "Event \"{}\" failed to dispatch data to Channel callback of subscriber {}: {}.",
-                                self.name,
-                                subscriber.name,
-                                err
-                            );
-                        }
-
-                        if subscriber.remove_on_error {
-                            if self.log_on_error {
-                                log::error!("Subscriber will be unregistered from event.");
-                            }
-
-                            subscribers_to_remove.push(index);
-                        }
-
-                        errors.push(EventError::ChannelSend(err));
-                    }
+            let result = subscriber.dispatch(data).await;
+            if let Err(err) = result {
+                if self.log_on_error {
+                    log::error!(
+                        "Event \"{}\" failed to dispatch data to subscriber {}: {}.",
+                        self.name,
+                        subscriber.name,
+                        err
+                    );
                 }
 
-                Callback::Closure(closure) => {
-                    let result = closure(data);
-
-                    if let Err(err) = result {
-                        if self.log_on_error {
-                            log::error!(
-                                "Event \"{}\" failed to dispatch data to Closure callback of subscriber {}: {}.",
-                                self.name,
-                                subscriber.name,
-                                err
-                            );
-                        }
-
-                        if subscriber.remove_on_error {
-                            if self.log_on_error {
-                                log::error!("Subscriber will be unregistered from event.");
-                            }
-
-                            subscribers_to_remove.push(index);
-                        }
-
-                        errors.push(EventError::Closure(err));
+                if subscriber.remove_on_error {
+                    if self.log_on_error {
+                        log::error!("Subscriber will be unregistered from event.");
                     }
+
+                    subscribers_to_remove.push(index);
                 }
+
+                errors.push(err);
             }
         }
 
