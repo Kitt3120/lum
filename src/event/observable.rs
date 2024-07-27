@@ -1,11 +1,11 @@
 use tokio::sync::Mutex;
 
-use super::{Event, EventError};
+use super::{DispatchError, Event};
 
 #[derive(Debug)]
 pub enum ObservableResult<T> {
     Unchanged,
-    Changed(Result<(), Vec<EventError<T>>>),
+    Changed(Result<(), Vec<DispatchError<T>>>),
 }
 
 #[derive(Debug)]

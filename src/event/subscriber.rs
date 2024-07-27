@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use tokio::sync::mpsc::{Receiver, Sender};
+use thiserror::Error;
+use tokio::sync::mpsc::{error::SendError, Receiver, Sender};
 use uuid::Uuid;
 
 use crate::service::BoxedError;
@@ -8,6 +9,15 @@ use crate::service::BoxedError;
 pub enum Callback<T> {
     Channel(Sender<Arc<T>>),
     Closure(Box<dyn Fn(Arc<T>) -> Result<(), BoxedError> + Send + Sync>),
+}
+
+#[derive(Debug, Error)]
+pub enum DispatchError<T> {
+    #[error("Failed to send data to channel: {0}")]
+    ChannelSend(#[from] SendError<Arc<T>>),
+
+    #[error("Failed to dispatch data to closure: {0}")]
+    Closure(#[from] BoxedError),
 }
 
 pub struct Subscriber<T> {
@@ -28,6 +38,13 @@ impl<T> Subscriber<T> {
             remove_on_error,
             callback,
             uuid: Uuid::new_v4(),
+        }
+    }
+
+    pub async fn dispatch(&self, data: Arc<T>) -> Result<(), DispatchError<T>> {
+        match &self.callback {
+            Callback::Channel(sender) => sender.send(data).await.map_err(DispatchError::ChannelSend),
+            Callback::Closure(closure) => closure(data).map_err(DispatchError::Closure),
         }
     }
 }
