@@ -1,6 +1,6 @@
 use crate::setlock::SetLock;
 
-use super::{PinnedBoxedFutureResult, Priority, Service, ServiceInfo, ServiceManager};
+use super::{types::LifetimedPinnedBoxedFutureResult, Priority, Service, ServiceInfo, ServiceManager};
 use log::{error, info};
 use serenity::{
     all::{GatewayIntents, Ready},
@@ -56,7 +56,7 @@ impl Service for DiscordService {
         &self.info
     }
 
-    fn start(&mut self, _service_manager: Arc<ServiceManager>) -> PinnedBoxedFutureResult<'_, ()> {
+    fn start(&mut self, _service_manager: Arc<ServiceManager>) -> LifetimedPinnedBoxedFutureResult<'_, ()> {
         Box::pin(async move {
             let client_ready_notify = Arc::new(Notify::new());
 
@@ -115,7 +115,7 @@ impl Service for DiscordService {
         })
     }
 
-    fn stop(&mut self) -> PinnedBoxedFutureResult<'_, ()> {
+    fn stop(&mut self) -> LifetimedPinnedBoxedFutureResult<'_, ()> {
         Box::pin(async move {
             if let Some(client_handle) = self.client_handle.take() {
                 info!("Waiting for Discord client to stop...");
@@ -129,7 +129,7 @@ impl Service for DiscordService {
         })
     }
 
-    fn task<'a>(&self) -> Option<PinnedBoxedFutureResult<'a, ()>> {
+    fn task<'a>(&self) -> Option<LifetimedPinnedBoxedFutureResult<'a, ()>> {
         Some(Box::pin(async move {
             let mut i = 0;
             loop {

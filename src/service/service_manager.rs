@@ -1,6 +1,6 @@
 use super::{
     service::Service,
-    types::{OverallStatus, PinnedBoxedFuture, Priority, ShutdownError, StartupError, Status},
+    types::{LifetimedPinnedBoxedFuture, OverallStatus, Priority, ShutdownError, StartupError, Status},
 };
 use crate::{
     service::Watchdog,
@@ -208,7 +208,7 @@ impl ServiceManager {
     }
 
     //TODO: When Rust allows async closures, refactor this to use iterator methods instead of for loop
-    pub fn overall_status(&self) -> PinnedBoxedFuture<'_, OverallStatus> {
+    pub fn overall_status(&self) -> LifetimedPinnedBoxedFuture<'_, OverallStatus> {
         Box::pin(async move {
             for service in self.services.iter() {
                 let service = service.lock().await;
@@ -224,7 +224,7 @@ impl ServiceManager {
     }
 
     //TODO: When Rust allows async closures, refactor this to use iterator methods instead of for loop
-    pub fn status_tree(&self) -> PinnedBoxedFuture<'_, String> {
+    pub fn status_tree(&self) -> LifetimedPinnedBoxedFuture<'_, String> {
         Box::pin(async move {
             let mut text_buffer = String::new();
 

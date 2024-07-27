@@ -4,11 +4,14 @@ use thiserror::Error;
 
 pub type BoxedError = Box<dyn Error + Send + Sync>;
 
-pub type BoxedFuture<'a, T> = Box<dyn Future<Output = T> + Send + 'a>;
-pub type BoxedFutureResult<'a, T> = BoxedFuture<'a, Result<T, BoxedError>>;
+pub type BoxedFuture<T> = Box<dyn Future<Output = T> + Send>;
+pub type BoxedFutureResult<T> = BoxedFuture<Result<T, BoxedError>>;
 
-pub type PinnedBoxedFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-pub type PinnedBoxedFutureResult<'a, T> = PinnedBoxedFuture<'a, Result<T, BoxedError>>;
+pub type PinnedBoxedFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
+pub type PinnedBoxedFutureResult<T> = PinnedBoxedFuture<Result<T, BoxedError>>;
+
+pub type LifetimedPinnedBoxedFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+pub type LifetimedPinnedBoxedFutureResult<'a, T> = LifetimedPinnedBoxedFuture<'a, Result<T, BoxedError>>;
 
 #[derive(Debug, Clone)]
 pub enum Status {
