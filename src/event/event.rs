@@ -11,8 +11,8 @@ use tokio::sync::{
 };
 
 pub enum Subscriber<T> {
-    Channel(Sender<Arc<T>>),
-    Closure(Box<dyn Fn(Arc<T>) -> Result<(), BoxedError> + Send + Sync>),
+    Channel(Sender<Arc<T>>, bool),
+    Closure(Box<dyn Fn(Arc<T>) -> Result<(), BoxedError> + Send + Sync>, bool),
 }
 
 #[derive(Debug, Error)]
@@ -25,17 +25,15 @@ pub struct Event<T> {
     pub name: String,
 
     log_on_error: bool,
-    remove_subscriber_on_error: bool,
 
     subscribers: Mutex<Vec<Subscriber<T>>>,
 }
 
 impl<T> Event<T> {
-    pub fn new(name: impl Into<String>, log_on_error: bool, remove_subscriber_on_error: bool) -> Self {
+    pub fn new(name: impl Into<String>, log_on_error: bool) -> Self {
         Self {
             name: name.into(),
             log_on_error,
-            remove_subscriber_on_error,
             subscribers: Mutex::new(Vec::new()),
         }
     }
@@ -45,10 +43,10 @@ impl<T> Event<T> {
         subscribers.len()
     }
 
-    pub async fn open_channel(&self, buffer: usize) -> Receiver<Arc<T>> {
+    pub async fn open_channel(&self, buffer: usize, remove_on_error: bool) -> Receiver<Arc<T>> {
         let (sender, receiver) = channel(buffer);
         let mut subscribers = self.subscribers.lock().await;
-        subscribers.push(Subscriber::Channel(sender));
+        subscribers.push(Subscriber::Channel(sender, remove_on_error));
 
         receiver
     }
@@ -56,9 +54,10 @@ impl<T> Event<T> {
     pub async fn subscribe(
         &self,
         closure: impl Fn(Arc<T>) -> Result<(), BoxedError> + Send + Sync + 'static,
+        remove_on_error: bool,
     ) {
         let mut subscribers = self.subscribers.lock().await;
-        subscribers.push(Subscriber::Closure(Box::new(closure)));
+        subscribers.push(Subscriber::Closure(Box::new(closure), remove_on_error));
     }
 
     pub async fn dispatch(&self, data: T) -> Result<(), Vec<EventError<T>>> {
@@ -72,7 +71,7 @@ impl<T> Event<T> {
             let data = Arc::clone(&data);
 
             match subscriber {
-                Subscriber::Channel(sender) => {
+                Subscriber::Channel(sender, remove_on_error) => {
                     let result = sender.send(data).await;
 
                     if let Err(err) = result {
@@ -85,8 +84,11 @@ impl<T> Event<T> {
                             );
                         }
 
-                        if self.remove_subscriber_on_error {
-                            log::error!("Receiver will be unregistered from event.");
+                        if *remove_on_error {
+                            if self.log_on_error {
+                                log::error!("Receiver will be unregistered from event.");
+                            }
+
                             subscribers_to_remove.push(index);
                         }
 
@@ -94,7 +96,7 @@ impl<T> Event<T> {
                     }
                 }
 
-                Subscriber::Closure(closure) => {
+                Subscriber::Closure(closure, remove_on_error) => {
                     let result = closure(data);
 
                     if let Err(err) = result {
@@ -107,8 +109,11 @@ impl<T> Event<T> {
                             );
                         }
 
-                        if self.remove_subscriber_on_error {
-                            log::error!("Closure will be unregistered from event.");
+                        if *remove_on_error {
+                            if self.log_on_error {
+                                log::error!("Closure will be unregistered from event.");
+                            }
+
                             subscribers_to_remove.push(index);
                         }
 
@@ -132,15 +137,15 @@ impl<T> Event<T> {
 
 impl<T> Default for Event<T> {
     fn default() -> Self {
-        Self::new("Unnamed Event", true, false)
+        Self::new("Unnamed Event", true)
     }
 }
 
-impl<T, I> From<I> for Event<T>
+impl<T, S> From<S> for Event<T>
 where
-    I: Into<String>,
+    S: Into<String>,
 {
-    fn from(name: I) -> Self {
+    fn from(name: S) -> Self {
         Self {
             name: name.into(),
             ..Default::default()
@@ -153,7 +158,6 @@ impl<T> Debug for Event<T> {
         f.debug_struct(type_name::<Self>())
             .field("name", &self.name)
             .field("log_on_error", &self.log_on_error)
-            .field("remove_subscriber_on_error", &self.remove_subscriber_on_error)
             .field("subscribers", &self.subscribers.blocking_lock().len())
             .finish()
     }
