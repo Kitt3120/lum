@@ -4,10 +4,11 @@ use thiserror::Error;
 use tokio::sync::mpsc::{error::SendError, Receiver, Sender};
 use uuid::Uuid;
 
-use crate::service::BoxedError;
+use crate::service::{BoxedError, PinnedBoxedFutureResult};
 
 pub enum Callback<T> {
     Channel(Sender<Arc<T>>),
+    AsyncClosure(Box<dyn Fn(Arc<T>) -> PinnedBoxedFutureResult<()> + Send + Sync>),
     Closure(Box<dyn Fn(Arc<T>) -> Result<(), BoxedError> + Send + Sync>),
 }
 
@@ -16,8 +17,11 @@ pub enum DispatchError<T> {
     #[error("Failed to send data to channel: {0}")]
     ChannelSend(#[from] SendError<Arc<T>>),
 
+    #[error("Failed to dispatch data to async closure: {0}")]
+    AsyncClosure(BoxedError),
+
     #[error("Failed to dispatch data to closure: {0}")]
-    Closure(#[from] BoxedError),
+    Closure(BoxedError),
 }
 
 pub struct Subscriber<T> {
@@ -44,6 +48,7 @@ impl<T> Subscriber<T> {
     pub async fn dispatch(&self, data: Arc<T>) -> Result<(), DispatchError<T>> {
         match &self.callback {
             Callback::Channel(sender) => sender.send(data).await.map_err(DispatchError::ChannelSend),
+            Callback::AsyncClosure(closure) => closure(data).await.map_err(DispatchError::AsyncClosure),
             Callback::Closure(closure) => closure(data).map_err(DispatchError::Closure),
         }
     }
