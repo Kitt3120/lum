@@ -54,25 +54,7 @@ impl<T> Event<T> {
         receiver_subscription
     }
 
-    pub async fn register_callback<S>(
-        &self,
-        name: S,
-        closure: impl Fn(Arc<T>) -> Result<(), BoxedError> + Send + Sync + 'static,
-        remove_on_error: bool,
-    ) -> Subscription
-    where
-        S: Into<String>,
-    {
-        let subscriber = Subscriber::new(name, remove_on_error, Callback::Closure(Box::new(closure)));
-        let subscription = Subscription::from(&subscriber);
-
-        let mut subscribers = self.subscribers.lock().await;
-        subscribers.push(subscriber);
-
-        subscription
-    }
-
-    pub async fn register_async_callback<S>(
+    pub async fn subscribe_async<S>(
         &self,
         name: S,
         closure: impl Fn(Arc<T>) -> PinnedBoxedFutureResult<()> + Send + Sync + 'static,
@@ -82,6 +64,24 @@ impl<T> Event<T> {
         S: Into<String>,
     {
         let subscriber = Subscriber::new(name, remove_on_error, Callback::AsyncClosure(Box::new(closure)));
+        let subscription = Subscription::from(&subscriber);
+
+        let mut subscribers = self.subscribers.lock().await;
+        subscribers.push(subscriber);
+
+        subscription
+    }
+
+    pub async fn subscribe<S>(
+        &self,
+        name: S,
+        closure: impl Fn(Arc<T>) -> Result<(), BoxedError> + Send + Sync + 'static,
+        remove_on_error: bool,
+    ) -> Subscription
+    where
+        S: Into<String>,
+    {
+        let subscriber = Subscriber::new(name, remove_on_error, Callback::Closure(Box::new(closure)));
         let subscription = Subscription::from(&subscriber);
 
         let mut subscribers = self.subscribers.lock().await;
