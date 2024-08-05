@@ -6,14 +6,20 @@ use uuid::Uuid;
 
 use crate::service::{BoxedError, PinnedBoxedFutureResult};
 
-pub enum Callback<T> {
+pub enum Callback<T>
+where
+    T: Send + Sync + 'static,
+{
     Channel(Sender<Arc<T>>),
     AsyncClosure(Box<dyn Fn(Arc<T>) -> PinnedBoxedFutureResult<()> + Send + Sync>),
     Closure(Box<dyn Fn(Arc<T>) -> Result<(), BoxedError> + Send + Sync>),
 }
 
 #[derive(Debug, Error)]
-pub enum DispatchError<T> {
+pub enum DispatchError<T>
+where
+    T: Send + Sync + 'static,
+{
     #[error("Failed to send data to channel: {0}")]
     ChannelSend(#[from] SendError<Arc<T>>),
 
@@ -24,21 +30,29 @@ pub enum DispatchError<T> {
     Closure(BoxedError),
 }
 
-pub struct Subscriber<T> {
+pub struct Subscriber<T>
+where
+    T: Send + Sync + 'static,
+{
     pub name: String,
+    pub log_on_error: bool,
     pub remove_on_error: bool,
     pub callback: Callback<T>,
 
     pub uuid: Uuid,
 }
 
-impl<T> Subscriber<T> {
-    pub fn new<S>(name: S, remove_on_error: bool, callback: Callback<T>) -> Self
+impl<T> Subscriber<T>
+where
+    T: Send + Sync + 'static,
+{
+    pub fn new<S>(name: S, log_on_error: bool, remove_on_error: bool, callback: Callback<T>) -> Self
     where
         S: Into<String>,
     {
         Self {
             name: name.into(),
+            log_on_error,
             remove_on_error,
             callback,
             uuid: Uuid::new_v4(),
@@ -54,20 +68,26 @@ impl<T> Subscriber<T> {
     }
 }
 
-impl<T> PartialEq for Subscriber<T> {
+impl<T> PartialEq for Subscriber<T>
+where
+    T: Send + Sync + 'static,
+{
     fn eq(&self, other: &Self) -> bool {
         self.uuid == other.uuid
     }
 }
 
-impl<T> Eq for Subscriber<T> {}
+impl<T> Eq for Subscriber<T> where T: Send + Sync {}
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Subscription {
     pub uuid: Uuid,
 }
 
-impl<T> From<Subscriber<T>> for Subscription {
+impl<T> From<Subscriber<T>> for Subscription
+where
+    T: Send + Sync + 'static,
+{
     fn from(subscriber: Subscriber<T>) -> Self {
         Self {
             uuid: subscriber.uuid,
@@ -75,7 +95,10 @@ impl<T> From<Subscriber<T>> for Subscription {
     }
 }
 
-impl<T> From<&Subscriber<T>> for Subscription {
+impl<T> From<&Subscriber<T>> for Subscription
+where
+    T: Send + Sync + 'static,
+{
     fn from(subscriber: &Subscriber<T>) -> Self {
         Self {
             uuid: subscriber.uuid,
@@ -89,12 +112,18 @@ impl AsRef<Uuid> for Subscription {
     }
 }
 
-pub struct ReceiverSubscription<T> {
+pub struct ReceiverSubscription<T>
+where
+    T: Send + Sync + 'static,
+{
     pub subscription: Subscription,
     pub receiver: Receiver<T>,
 }
 
-impl<T> ReceiverSubscription<T> {
+impl<T> ReceiverSubscription<T>
+where
+    T: Send + Sync + 'static,
+{
     pub fn new(subscription: Subscription, receiver: Receiver<T>) -> Self {
         Self {
             subscription,
@@ -103,21 +132,30 @@ impl<T> ReceiverSubscription<T> {
     }
 }
 
-impl<T> PartialEq for ReceiverSubscription<T> {
+impl<T> PartialEq for ReceiverSubscription<T>
+where
+    T: Send + Sync + 'static,
+{
     fn eq(&self, other: &Self) -> bool {
         self.subscription == other.subscription
     }
 }
 
-impl<T> Eq for ReceiverSubscription<T> {}
+impl<T> Eq for ReceiverSubscription<T> where T: Send + Sync {}
 
-impl<T> AsRef<Subscription> for ReceiverSubscription<T> {
+impl<T> AsRef<Subscription> for ReceiverSubscription<T>
+where
+    T: Send + Sync + 'static,
+{
     fn as_ref(&self) -> &Subscription {
         &self.subscription
     }
 }
 
-impl<T> AsRef<Uuid> for ReceiverSubscription<T> {
+impl<T> AsRef<Uuid> for ReceiverSubscription<T>
+where
+    T: Send + Sync + 'static,
+{
     fn as_ref(&self) -> &Uuid {
         self.subscription.as_ref()
     }

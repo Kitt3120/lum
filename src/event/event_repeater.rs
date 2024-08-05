@@ -1,57 +1,56 @@
 use std::sync::Arc;
+use tokio::{sync::Mutex, task::JoinHandle};
 
-use tokio::{spawn, task::JoinHandle};
+use super::Event;
 
-use crate::service::{BoxedError, PinnedBoxedFutureResult};
-
-use super::{
-    subscriber::{ReceiverSubscription, Subscription},
-    Event,
-};
-
-pub struct EventRepeater<T> {
-    pub name: String,
-
-    channel_task: JoinHandle<()>,
-
-    subscription_channel: ReceiverSubscription<Arc<T>>,
-    subscription_async_closure: Subscription,
-    subscription_closure: Subscription,
+pub struct EventRepeater<T>
+where
+    T: Send + Sync + 'static,
+{
+    pub event: Event<T>,
+    self_arc: Mutex<Option<Arc<Self>>>,
+    tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
-impl<T> EventRepeater<T> {
-    pub async fn new<S>(name: S, event: &Event<T>, buffer: usize) -> Self
+impl<T> EventRepeater<T>
+where
+    T: Send + Sync + 'static,
+{
+    pub async fn new<S>(name: S) -> Arc<Self>
     where
         T: 'static,
         S: Into<String>,
     {
-        let name = name.into();
+        let event = Event::new(name);
+        let event_repeater = Self {
+            self_arc: Mutex::new(None),
+            event,
+            tasks: Mutex::new(Vec::new()),
+        };
 
-        let subscription_channel = event.open_channel(name.clone(), buffer, false).await;
+        let self_arc = Arc::new(event_repeater);
+        let mut lock = self_arc.self_arc.lock().await;
+        let self_arc_clone = Arc::clone(&self_arc);
+        *lock = Some(self_arc_clone);
+        drop(lock);
 
-        let subscription_async_closure = event.subscribe_async(name.clone(), async_closure, false).await;
-        let subscription_closure = event.subscribe(name.clone(), closure, false).await;
-
-        let channel_task = spawn(run_channel_task());
-
-        Self {
-            name,
-
-            channel_task,
-
-            subscription_channel,
-            subscription_async_closure,
-            subscription_closure,
-        }
+        self_arc
     }
-}
 
-async fn run_channel_task() {}
+    pub async fn attach(&self, event: &Event<T>, buffer: usize) {
+        let self_arc = match self.self_arc.lock().await.as_ref() {
+            Some(arc) => Arc::clone(arc),
+            None => panic!("Tried to attach event {} to EventRepeater {} before it was initialized. Did you not use EventRepeater<T>::new()?", event.name, self.event.name),
+        };
 
-fn async_closure<T>(data: Arc<T>) -> PinnedBoxedFutureResult<()> {
-    Box::pin(async move { Ok(()) })
-}
+        let mut receiver = event.open_channel(&self.event.name, buffer, true, true).await;
+        let join_handle = tokio::spawn(async move {
+            while let Some(value) = receiver.receiver.recv().await {
+                let _ = self_arc.event.dispatch(value).await;
+            }
+        });
 
-fn closure<T>(data: Arc<T>) -> Result<(), BoxedError> {
-    Ok(())
+        let mut tasks = self.tasks.lock().await;
+        tasks.push(join_handle);
+    }
 }

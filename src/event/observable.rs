@@ -1,9 +1,14 @@
+use std::sync::Arc;
+
 use tokio::sync::Mutex;
 
 use super::{DispatchError, Event};
 
 #[derive(Debug)]
-pub enum ObservableResult<T> {
+pub enum ObservableResult<T>
+where
+    T: Send + Sync + 'static,
+{
     Unchanged,
     Changed(Result<(), Vec<DispatchError<T>>>),
 }
@@ -11,7 +16,7 @@ pub enum ObservableResult<T> {
 #[derive(Debug)]
 pub struct Observable<T>
 where
-    T: Clone + PartialEq,
+    T: Send + Sync + 'static + Clone + PartialEq,
 {
     value: Mutex<T>,
     on_change: Event<T>,
@@ -19,7 +24,7 @@ where
 
 impl<T> Observable<T>
 where
-    T: Clone + PartialEq,
+    T: Send + Sync + 'static + Clone + PartialEq,
 {
     pub fn new<I>(value: T, event_name: I) -> Self
     where
@@ -27,7 +32,7 @@ where
     {
         Self {
             value: Mutex::new(value),
-            on_change: Event::from(event_name),
+            on_change: Event::new(event_name),
         }
     }
 
@@ -44,8 +49,10 @@ where
             return ObservableResult::Unchanged;
         }
 
-        *lock = value;
-        let dispatch_result = self.on_change.dispatch(lock.clone()).await;
+        *lock = value.clone();
+
+        let value = Arc::new(value);
+        let dispatch_result = self.on_change.dispatch(value).await;
 
         match dispatch_result {
             Ok(_) => ObservableResult::Changed(Ok(())),
