@@ -11,19 +11,25 @@ use super::{
     Callback, DispatchError, Subscriber,
 };
 
-pub struct Event<T> {
+pub struct Event<T>
+where
+    T: Send + Sync + 'static,
+{
     pub name: String,
-
-    log_on_error: bool,
 
     subscribers: Mutex<Vec<Subscriber<T>>>,
 }
 
-impl<T> Event<T> {
-    pub fn new(name: impl Into<String>, log_on_error: bool) -> Self {
+impl<T> Event<T>
+where
+    T: Send + Sync + 'static,
+{
+    pub fn new<S>(name: S) -> Self
+    where
+        S: Into<String>,
+    {
         Self {
             name: name.into(),
-            log_on_error,
             subscribers: Mutex::new(Vec::new()),
         }
     }
@@ -37,13 +43,14 @@ impl<T> Event<T> {
         &self,
         name: S,
         buffer: usize,
+        log_on_error: bool,
         remove_on_error: bool,
     ) -> ReceiverSubscription<Arc<T>>
     where
         S: Into<String>,
     {
         let (sender, receiver) = channel(buffer);
-        let subscriber = Subscriber::new(name, remove_on_error, Callback::Channel(sender));
+        let subscriber = Subscriber::new(name, log_on_error, remove_on_error, Callback::Channel(sender));
 
         let subscription = Subscription::from(&subscriber);
         let receiver_subscription = ReceiverSubscription::new(subscription, receiver);
@@ -58,12 +65,18 @@ impl<T> Event<T> {
         &self,
         name: S,
         closure: impl Fn(Arc<T>) -> PinnedBoxedFutureResult<()> + Send + Sync + 'static,
+        log_on_error: bool,
         remove_on_error: bool,
     ) -> Subscription
     where
         S: Into<String>,
     {
-        let subscriber = Subscriber::new(name, remove_on_error, Callback::AsyncClosure(Box::new(closure)));
+        let subscriber = Subscriber::new(
+            name,
+            log_on_error,
+            remove_on_error,
+            Callback::AsyncClosure(Box::new(closure)),
+        );
         let subscription = Subscription::from(&subscriber);
 
         let mut subscribers = self.subscribers.lock().await;
@@ -76,12 +89,18 @@ impl<T> Event<T> {
         &self,
         name: S,
         closure: impl Fn(Arc<T>) -> Result<(), BoxedError> + Send + Sync + 'static,
+        log_on_error: bool,
         remove_on_error: bool,
     ) -> Subscription
     where
         S: Into<String>,
     {
-        let subscriber = Subscriber::new(name, remove_on_error, Callback::Closure(Box::new(closure)));
+        let subscriber = Subscriber::new(
+            name,
+            log_on_error,
+            remove_on_error,
+            Callback::Closure(Box::new(closure)),
+        );
         let subscription = Subscription::from(&subscriber);
 
         let mut subscribers = self.subscribers.lock().await;
@@ -90,9 +109,7 @@ impl<T> Event<T> {
         subscription
     }
 
-    pub async fn dispatch(&self, data: T) -> Result<(), Vec<DispatchError<T>>> {
-        let data = Arc::new(data);
-
+    pub async fn dispatch(&self, data: Arc<T>) -> Result<(), Vec<DispatchError<T>>> {
         let mut errors = Vec::new();
         let mut subscribers_to_remove = Vec::new();
 
@@ -102,7 +119,7 @@ impl<T> Event<T> {
 
             let result = subscriber.dispatch(data).await;
             if let Err(err) = result {
-                if self.log_on_error {
+                if subscriber.log_on_error {
                     log::error!(
                         "Event \"{}\" failed to dispatch data to subscriber {}: {}.",
                         self.name,
@@ -112,7 +129,7 @@ impl<T> Event<T> {
                 }
 
                 if subscriber.remove_on_error {
-                    if self.log_on_error {
+                    if subscriber.log_on_error {
                         log::error!("Subscriber will be unregistered from event.");
                     }
 
@@ -135,29 +152,13 @@ impl<T> Event<T> {
     }
 }
 
-impl<T> Default for Event<T> {
-    fn default() -> Self {
-        Self::new("Unnamed Event", true)
-    }
-}
-
-impl<T, S> From<S> for Event<T>
+impl<T> Debug for Event<T>
 where
-    S: Into<String>,
+    T: Send + Sync + 'static,
 {
-    fn from(name: S) -> Self {
-        Self {
-            name: name.into(),
-            ..Default::default()
-        }
-    }
-}
-
-impl<T> Debug for Event<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("name", &self.name)
-            .field("log_on_error", &self.log_on_error)
             .field("subscribers", &self.subscribers.blocking_lock().len())
             .finish()
     }

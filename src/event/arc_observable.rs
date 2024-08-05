@@ -10,20 +10,20 @@ use super::{Event, ObservableResult};
 #[derive(Debug)]
 pub struct ArcObservable<T>
 where
-    T: Hash,
+    T: Send + 'static + Hash,
 {
     value: Arc<Mutex<T>>,
-    on_change: Event<Arc<Mutex<T>>>,
+    on_change: Event<Mutex<T>>,
 }
 
 impl<T> ArcObservable<T>
 where
-    T: Hash,
+    T: Send + 'static + Hash,
 {
     pub fn new(value: T, event_name: impl Into<String>) -> Self {
         Self {
             value: Arc::new(Mutex::new(value)),
-            on_change: Event::from(event_name),
+            on_change: Event::new(event_name),
         }
     }
 
@@ -31,7 +31,7 @@ where
         Arc::clone(&self.value)
     }
 
-    pub async fn set(&self, value: T) -> ObservableResult<Arc<Mutex<T>>> {
+    pub async fn set(&self, value: T) -> ObservableResult<Mutex<T>> {
         let mut lock = self.value.lock().await;
 
         let mut hasher = DefaultHasher::new();
