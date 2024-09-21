@@ -43,7 +43,10 @@ where
             None => panic!("Tried to attach event {} to EventRepeater {} before it was initialized. Did you not use EventRepeater<T>::new()?", event.name, self.event.name),
         };
 
-        let mut receiver = event.open_channel(&self.event.name, buffer, true, true).await;
+        let mut receiver = event
+            .subscribe_channel(&self.event.name, buffer, true, true)
+            .await;
+
         let join_handle = tokio::spawn(async move {
             while let Some(value) = receiver.receiver.recv().await {
                 let _ = self_arc.event.dispatch(value).await;
