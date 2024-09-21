@@ -57,3 +57,12 @@ where
         tasks.push(join_handle);
     }
 }
+
+impl<T> AsRef<Event<T>> for EventRepeater<T>
+where
+    T: Send + Sync + 'static,
+{
+    fn as_ref(&self) -> &Event<T> {
+        &self.event
+    }
+}
