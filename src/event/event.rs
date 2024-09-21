@@ -39,7 +39,7 @@ where
         subscribers.len()
     }
 
-    pub async fn open_channel<S>(
+    pub async fn subscribe_channel<S>(
         &self,
         name: S,
         buffer: usize,
@@ -61,7 +61,7 @@ where
         receiver_subscription
     }
 
-    pub async fn subscribe_async<S>(
+    pub async fn subscribe_async_closure<S>(
         &self,
         name: S,
         closure: impl Fn(Arc<T>) -> PinnedBoxedFutureResult<()> + Send + Sync + 'static,
@@ -85,7 +85,7 @@ where
         subscription
     }
 
-    pub async fn subscribe<S>(
+    pub async fn subscribe_closure<S>(
         &self,
         name: S,
         closure: impl Fn(Arc<T>) -> Result<(), BoxedError> + Send + Sync + 'static,

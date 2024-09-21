@@ -11,8 +11,8 @@ where
     T: Send + Sync + 'static,
 {
     Channel(Sender<Arc<T>>),
-    AsyncClosure(Box<dyn Fn(Arc<T>) -> PinnedBoxedFutureResult<()> + Send + Sync>),
     Closure(Box<dyn Fn(Arc<T>) -> Result<(), BoxedError> + Send + Sync>),
+    AsyncClosure(Box<dyn Fn(Arc<T>) -> PinnedBoxedFutureResult<()> + Send + Sync>),
 }
 
 #[derive(Debug, Error)]
@@ -23,11 +23,11 @@ where
     #[error("Failed to send data to channel: {0}")]
     ChannelSend(#[from] SendError<Arc<T>>),
 
-    #[error("Failed to dispatch data to async closure: {0}")]
-    AsyncClosure(BoxedError),
-
     #[error("Failed to dispatch data to closure: {0}")]
     Closure(BoxedError),
+
+    #[error("Failed to dispatch data to async closure: {0}")]
+    AsyncClosure(BoxedError),
 }
 
 pub struct Subscriber<T>
@@ -62,8 +62,8 @@ where
     pub async fn dispatch(&self, data: Arc<T>) -> Result<(), DispatchError<T>> {
         match &self.callback {
             Callback::Channel(sender) => sender.send(data).await.map_err(DispatchError::ChannelSend),
-            Callback::AsyncClosure(closure) => closure(data).await.map_err(DispatchError::AsyncClosure),
             Callback::Closure(closure) => closure(data).map_err(DispatchError::Closure),
+            Callback::AsyncClosure(closure) => closure(data).await.map_err(DispatchError::AsyncClosure),
         }
     }
 }
