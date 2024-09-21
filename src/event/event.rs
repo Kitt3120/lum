@@ -5,6 +5,7 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::{mpsc::channel, Mutex};
+use uuid::Uuid;
 
 use super::{Callback, DispatchError, ReceiverSubscription, Subscriber, Subscription};
 
@@ -14,6 +15,7 @@ where
 {
     pub name: String,
 
+    pub uuid: Uuid,
     subscribers: Mutex<Vec<Subscriber<T>>>,
 }
 
@@ -27,6 +29,7 @@ where
     {
         Self {
             name: name.into(),
+            uuid: Uuid::new_v4(),
             subscribers: Mutex::new(Vec::new()),
         }
     }
@@ -106,6 +109,25 @@ where
         subscription
     }
 
+    pub async fn unsubscribe<S>(&self, subscription: S) -> Option<Subscription>
+    where
+        S: Into<Subscription>,
+    {
+        let subscription_to_remove = subscription.into();
+
+        let mut subscribers = self.subscribers.lock().await;
+        let index = subscribers
+            .iter()
+            .position(|subscription_of_event| subscription_of_event.uuid == subscription_to_remove.uuid);
+
+        if let Some(index) = index {
+            subscribers.remove(index);
+            None
+        } else {
+            Some(subscription_to_remove)
+        }
+    }
+
     pub async fn dispatch(&self, data: Arc<T>) -> Result<(), Vec<DispatchError<T>>> {
         let mut errors = Vec::new();
         let mut subscribers_to_remove = Vec::new();
@@ -149,12 +171,24 @@ where
     }
 }
 
+impl<T> PartialEq for Event<T>
+where
+    T: Send + Sync + 'static,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.uuid == other.uuid
+    }
+}
+
+impl<T> Eq for Event<T> where T: Send + Sync {}
+
 impl<T> Debug for Event<T>
 where
     T: Send + Sync + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
+            .field("uuid", &self.uuid)
             .field("name", &self.name)
             .field("subscribers", &self.subscribers.blocking_lock().len())
             .finish()
