@@ -6,10 +6,7 @@ use std::{
 };
 use tokio::sync::{mpsc::channel, Mutex};
 
-use super::{
-    subscriber::{ReceiverSubscription, Subscription},
-    Callback, DispatchError, Subscriber,
-};
+use super::{Callback, DispatchError, ReceiverSubscription, Subscriber, Subscription};
 
 pub struct Event<T>
 where

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use thiserror::Error;
-use tokio::sync::mpsc::{error::SendError, Receiver, Sender};
+use tokio::sync::mpsc::{error::SendError, Sender};
 use uuid::Uuid;
 
 use crate::service::{BoxedError, PinnedBoxedFutureResult};
@@ -78,85 +78,3 @@ where
 }
 
 impl<T> Eq for Subscriber<T> where T: Send + Sync {}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct Subscription {
-    pub uuid: Uuid,
-}
-
-impl<T> From<Subscriber<T>> for Subscription
-where
-    T: Send + Sync + 'static,
-{
-    fn from(subscriber: Subscriber<T>) -> Self {
-        Self {
-            uuid: subscriber.uuid,
-        }
-    }
-}
-
-impl<T> From<&Subscriber<T>> for Subscription
-where
-    T: Send + Sync + 'static,
-{
-    fn from(subscriber: &Subscriber<T>) -> Self {
-        Self {
-            uuid: subscriber.uuid,
-        }
-    }
-}
-
-impl AsRef<Uuid> for Subscription {
-    fn as_ref(&self) -> &Uuid {
-        &self.uuid
-    }
-}
-
-pub struct ReceiverSubscription<T>
-where
-    T: Send + Sync + 'static,
-{
-    pub subscription: Subscription,
-    pub receiver: Receiver<T>,
-}
-
-impl<T> ReceiverSubscription<T>
-where
-    T: Send + Sync + 'static,
-{
-    pub fn new(subscription: Subscription, receiver: Receiver<T>) -> Self {
-        Self {
-            subscription,
-            receiver,
-        }
-    }
-}
-
-impl<T> PartialEq for ReceiverSubscription<T>
-where
-    T: Send + Sync + 'static,
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.subscription == other.subscription
-    }
-}
-
-impl<T> Eq for ReceiverSubscription<T> where T: Send + Sync {}
-
-impl<T> AsRef<Subscription> for ReceiverSubscription<T>
-where
-    T: Send + Sync + 'static,
-{
-    fn as_ref(&self) -> &Subscription {
-        &self.subscription
-    }
-}
-
-impl<T> AsRef<Uuid> for ReceiverSubscription<T>
-where
-    T: Send + Sync + 'static,
-{
-    fn as_ref(&self) -> &Uuid {
-        self.subscription.as_ref()
-    }
-}
