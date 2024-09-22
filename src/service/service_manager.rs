@@ -3,8 +3,7 @@ use super::{
     types::{LifetimedPinnedBoxedFuture, OverallStatus, Priority, ShutdownError, StartupError, Status},
 };
 use crate::{
-    service::Watchdog,
-    setlock::{SetLock, SetLockError},
+    event::EventRepeater, service::Watchdog, setlock::{SetLock, SetLockError}
 };
 use log::{error, info, warn};
 use std::{collections::HashMap, fmt::Display, mem, sync::Arc, time::Duration};
@@ -58,6 +57,7 @@ pub fn new() -> Self {
             arc: Mutex::new(SetLock::new()),
             services: self.services,
             background_tasks: Mutex::new(HashMap::new()),
+            on_status_change: EventRepeater::new("service_manager_on_status_change").await,
         };
 
         let self_arc = Arc::new(service_manager);
@@ -81,6 +81,8 @@ pub struct ServiceManager {
     arc: Mutex<SetLock<Arc<Self>>>,
     services: Vec<Arc<Mutex<dyn Service>>>,
     background_tasks: Mutex<HashMap<String, JoinHandle<()>>>,
+
+    pub on_status_change: Arc<EventRepeater<Status>>,
 }
 
 impl ServiceManager {
@@ -118,8 +120,13 @@ impl ServiceManager {
             return Err(StartupError::BackgroundTaskAlreadyRunning(service_id.clone()));
         }
 
-        service_lock.info().status.set(Status::Starting).await;
+        let service_status_event = service_lock.info().status.as_ref();
+        let attachment_result = self.on_status_change.attach(service_status_event, 2).await;
+        if let Err(err) = attachment_result {
+            return Err(StartupError::StatusAttachmentFailed(service_id.clone(), err));
+        }
 
+        service_lock.info().status.set(Status::Starting).await;
         self.init_service(&mut service_lock).await?;
         self.start_background_task(&service_lock, Arc::clone(&service))
             .await;
@@ -148,6 +155,12 @@ impl ServiceManager {
         service_lock.info().status.set(Status::Stopping).await;
 
         self.shutdown_service(&mut service_lock).await?;
+
+        let service_status_event = service_lock.info().status.as_ref();
+        let detach_result = self.on_status_change.detach(service_status_event).await;
+        if let Err(err) = detach_result {
+            return Err(ShutdownError::StatusDetachmentFailed(service_id.clone(), err));
+        }
 
         info!("Stopped service {}", service_lock.info().name);
 

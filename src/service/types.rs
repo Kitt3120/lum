@@ -2,6 +2,8 @@ use std::{error::Error, fmt::Display, future::Future, pin::Pin};
 
 use thiserror::Error;
 
+use crate::event::event_repeater::{AttachError, DetachError};
+
 pub type BoxedError = Box<dyn Error + Send + Sync>;
 
 pub type BoxedFuture<T> = Box<dyn Future<Output = T> + Send>;
@@ -89,10 +91,18 @@ impl Display for Priority {
 pub enum StartupError {
     #[error("Service {0} is not managed by this Service Manager")]
     ServiceNotManaged(String),
-    #[error("Service {0} already has a background task running")]
-    BackgroundTaskAlreadyRunning(String),
+
     #[error("Service {0} is not stopped")]
     ServiceNotStopped(String),
+
+    #[error("Service {0} already has a background task running")]
+    BackgroundTaskAlreadyRunning(String),
+
+    #[error(
+        "Failed to attach Service Manager's status_change EventRepeater to {0}'s status_change Event: {1}"
+    )]
+    StatusAttachmentFailed(String, AttachError),
+
     #[error("Service {0} failed to start")]
     FailedToStartService(String),
 }
@@ -101,8 +111,15 @@ pub enum StartupError {
 pub enum ShutdownError {
     #[error("Service {0} is not managed by this Service Manager")]
     ServiceNotManaged(String),
+
     #[error("Service {0} is not started")]
     ServiceNotStarted(String),
+
     #[error("Service {0} failed to stop")]
     FailedToStopService(String),
+
+    #[error(
+        "Failed to detach Service Manager's status_change EventRepeater from {0}'s status_change Event: {1}"
+    )]
+    StatusDetachmentFailed(String, DetachError),
 }

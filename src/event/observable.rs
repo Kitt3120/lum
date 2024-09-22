@@ -60,3 +60,12 @@ where
         }
     }
 }
+
+impl<T> AsRef<Event<T>> for Observable<T>
+where
+    T: Send + Sync + 'static + Clone + PartialEq,
+{
+    fn as_ref(&self) -> &Event<T> {
+        &self.on_change
+    }
+}
