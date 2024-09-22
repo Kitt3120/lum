@@ -16,7 +16,7 @@ where
 #[derive(Debug)]
 pub struct Observable<T>
 where
-    T: Send + Sync + 'static + Clone + PartialEq,
+    T: Send + Sync + 'static + Clone + PartialEq, //TODO: Try out if we can remove Sync here
 {
     value: Mutex<T>,
     on_change: Event<T>,
