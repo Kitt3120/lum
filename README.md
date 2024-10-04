@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Kitt3120/lum/main/.github/assets/portrait.png" width="512">
+</p>
+
 # lum
 
 Lum Discord Bot
@@ -10,6 +14,4 @@ Beta: [![Deploy](https://github.com/Kitt3120/lum/actions/workflows/deploy_prerel
 
 # Collaborating
 
-A board can be viewed [here](https://github.com/users/Kitt3120/projects/3)
-
-Issues can be viewed [here](https://github.com/Kitt3120/lum/issues)
+Checkout out [Milestones](https://github.com/Kitt3120/lum/milestones), [Board](https://github.com/users/Kitt3120/projects/3), and [Issues](https://github.com/Kitt3120/lum/issues)
