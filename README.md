@@ -14,4 +14,4 @@ Beta: [![Deploy](https://github.com/Kitt3120/lum/actions/workflows/deploy_prerel
 
 # Collaborating
 
-Checkout out [Milestones](https://github.com/Kitt3120/lum/milestones), [Board](https://github.com/users/Kitt3120/projects/3), and [Issues](https://github.com/Kitt3120/lum/issues)
+Check out [Milestones](https://github.com/Kitt3120/lum/milestones), [Board](https://github.com/users/Kitt3120/projects/3), and [Issues](https://github.com/Kitt3120/lum/issues)

@@ -5,11 +5,12 @@ use std::{
 };
 
 use downcast_rs::{impl_downcast, DowncastSync};
-use tokio::sync::RwLock;
+
+use crate::event::Observable;
 
 use super::{
     service_manager::ServiceManager,
-    types::{PinnedBoxedFuture, PinnedBoxedFutureResult, Priority, Status},
+    types::{LifetimedPinnedBoxedFuture, LifetimedPinnedBoxedFutureResult, Priority, Status},
 };
 
 #[derive(Debug)]
@@ -18,7 +19,7 @@ pub struct ServiceInfo {
     pub name: String,
     pub priority: Priority,
 
-    pub status: Arc<RwLock<Status>>,
+    pub status: Observable<Status>,
 }
 
 impl ServiceInfo {
@@ -27,13 +28,8 @@ impl ServiceInfo {
             id: id.to_string(),
             name: name.to_string(),
             priority,
-            status: Arc::new(RwLock::new(Status::Stopped)),
+            status: Observable::new(Status::Stopped, format!("{}_status_change", id)),
         }
-    }
-
-    pub async fn set_status(&self, status: Status) {
-        let mut lock = self.status.write().await;
-        *(lock) = status
     }
 }
 
@@ -65,14 +61,14 @@ impl Hash for ServiceInfo {
 //TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a PinnedBoxedFutureResult
 pub trait Service: DowncastSync {
     fn info(&self) -> &ServiceInfo;
-    fn start(&mut self, service_manager: Arc<ServiceManager>) -> PinnedBoxedFutureResult<'_, ()>;
-    fn stop(&mut self) -> PinnedBoxedFutureResult<'_, ()>;
-    fn task<'a>(&self) -> Option<PinnedBoxedFutureResult<'a, ()>> {
+    fn start(&mut self, service_manager: Arc<ServiceManager>) -> LifetimedPinnedBoxedFutureResult<'_, ()>;
+    fn stop(&mut self) -> LifetimedPinnedBoxedFutureResult<'_, ()>;
+    fn task<'a>(&self) -> Option<LifetimedPinnedBoxedFutureResult<'a, ()>> {
         None
     }
 
-    fn is_available(&self) -> PinnedBoxedFuture<'_, bool> {
-        Box::pin(async move { matches!(&*(self.info().status.read().await), Status::Started) })
+    fn is_available(&self) -> LifetimedPinnedBoxedFuture<'_, bool> {
+        Box::pin(async move { matches!(self.info().status.get().await, Status::Started) })
     }
 }
 

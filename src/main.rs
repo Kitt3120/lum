@@ -7,7 +7,7 @@ use lum::{
     log,
     service::{discord::DiscordService, Service},
 };
-use tokio::sync::RwLock;
+use tokio::sync::Mutex;
 
 const BOT_NAME: &str = "Lum";
 
@@ -23,11 +23,7 @@ async fn main() {
     let config = match config_handler.load_config() {
         Ok(config) => config,
         Err(err) => {
-            error!(
-                "Error reading config file: {}\n{} will exit.",
-                err, BOT_NAME
-            );
-
+            error!("Error reading config file: {}\n{} will exit.", err, BOT_NAME);
             return;
         }
     };
@@ -43,18 +39,15 @@ async fn main() {
 
 fn setup_logger() {
     if let Err(error) = log::setup() {
-        panic!(
-            "Error setting up the Logger: {}\n{} will exit.",
-            error, BOT_NAME
-        );
+        panic!("Error setting up the Logger: {}\n{} will exit.", error, BOT_NAME);
     }
 }
 
-fn initialize_services(config: &Config) -> Vec<Arc<RwLock<dyn Service>>> {
+fn initialize_services(config: &Config) -> Vec<Arc<Mutex<dyn Service>>> {
     //TODO: Add services
     //...
 
     let discord_service = DiscordService::new(config.discord_token.as_str());
 
-    vec![Arc::new(RwLock::new(discord_service))]
+    vec![Arc::new(Mutex::new(discord_service))]
 }
