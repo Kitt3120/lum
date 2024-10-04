@@ -1,20 +1,26 @@
-use std::{collections::HashMap, sync::Arc};
+use log::error;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Weak},
+};
 use thiserror::Error;
 use tokio::{sync::Mutex, task::JoinHandle};
 use uuid::Uuid;
+
+use crate::setlock::{SetLock, SetLockError};
 
 use super::{Event, Subscription};
 
 #[derive(Debug, Error)]
 pub enum AttachError {
-    #[error("Tried to attach event {event_name} to EventRepeater {repeater_name} before it was initialized. Did you not use EventRepeater<T>::new()?")]
+    #[error("Tried to attach event {event_name} to EventRepeater {repeater_name} while it was uninitialized. Did you not use EventRepeater<T>::new()?")]
     NotInitialized {
         event_name: String,
         repeater_name: String,
     },
 
     #[error(
-        "Tried to attach event {event_name} to EventRepeater {repeater_name}, which was already attached."
+        "Tried to attach event {event_name} to EventRepeater {repeater_name}, which was already attached to it."
     )]
     AlreadyAttached {
         event_name: String,
@@ -47,7 +53,7 @@ where
     T: Send + Sync + 'static,
 {
     pub event: Event<T>,
-    self_arc: Mutex<Option<Arc<Self>>>,
+    weak: Mutex<SetLock<Weak<Self>>>,
     subscriptions: Mutex<HashMap<Uuid, (Subscription, JoinHandle<()>)>>,
 }
 
@@ -62,18 +68,28 @@ where
     {
         let event = Event::new(name);
         let event_repeater = Self {
-            self_arc: Mutex::new(None),
+            weak: Mutex::new(SetLock::new()),
             event,
             subscriptions: Mutex::new(HashMap::new()),
         };
 
-        let self_arc = Arc::new(event_repeater);
-        let mut lock = self_arc.self_arc.lock().await;
-        let self_arc_clone = Arc::clone(&self_arc);
-        *lock = Some(self_arc_clone);
-        drop(lock);
+        let arc = Arc::new(event_repeater);
+        let weak = Arc::downgrade(&arc);
 
-        self_arc
+        let result = arc.weak.lock().await.set(weak);
+        if let Err(err) = result {
+            match err {
+                SetLockError::AlreadySet => {
+                    error!("Failed to set EventRepeater {}'s Weak self-reference because it was already set. This should never happen. Shutting down ungracefully to prevent further undefined behavior.", arc.event.name);
+                    unreachable!(
+                        "Unable to set EventRepeater {}'s Weak self-reference because it was already set.",
+                        arc.event.name
+                    );
+                }
+            }
+        }
+
+        arc
     }
 
     pub async fn subscription_count(&self) -> usize {
@@ -81,13 +97,23 @@ where
     }
 
     pub async fn attach(&self, event: &Event<T>, buffer: usize) -> Result<(), AttachError> {
-        let self_arc = match self.self_arc.lock().await.as_ref() {
-            Some(arc) => Arc::clone(arc),
+        let lock = self.weak.lock().await;
+        let weak = match lock.get() {
+            Some(weak) => weak,
             None => {
                 return Err(AttachError::NotInitialized {
                     event_name: event.name.clone(),
                     repeater_name: self.event.name.clone(),
                 })
+            }
+        };
+
+        // This can't fail because the Arc is guaranteed to be valid as long as &self is valid.
+        let arc = match weak.upgrade() {
+            Some(arc) => arc,
+            None => {
+                error!("EventRepeater {}'s Weak self-reference could not be upgraded to Arc while attaching event {}. This should never happen. Shutting down ungracefully to prevent further undefined behavior.", self.event.name, event.name);
+                unreachable!("EventRepeater {}'s Weak self-reference could not be upgraded to Arc while attaching event {}.", self.event.name, event.name);
             }
         };
 
@@ -108,7 +134,7 @@ where
 
         let join_handle = tokio::spawn(async move {
             while let Some(value) = receiver.recv().await {
-                let _ = self_arc.event.dispatch(value).await;
+                let _ = arc.event.dispatch(value).await;
             }
         });
         subscriptions.insert(event.uuid, (subscription, join_handle));
