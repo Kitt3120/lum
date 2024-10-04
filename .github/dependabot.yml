@@ -4,6 +4,7 @@
 version: 2
 updates:
   - package-ecosystem: "cargo"
-    directory: "/" # Location of package manifests
+    directory: "/"
+    target-branch: staging
     schedule:
       interval: "daily"
