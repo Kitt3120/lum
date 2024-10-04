@@ -6,7 +6,7 @@ use crate::{
     event::EventRepeater, service::Watchdog, setlock::{SetLock, SetLockError}
 };
 use log::{error, info, warn};
-use std::{collections::HashMap, fmt::Display, mem, sync::Arc, time::Duration};
+use std::{collections::HashMap, fmt::Display, mem, sync::{Arc, Weak}, time::Duration};
 use tokio::{
     spawn,
     sync::{Mutex, MutexGuard},
@@ -54,31 +54,31 @@ pub fn new() -> Self {
 
     pub async fn build(self) -> Arc<ServiceManager> {
         let service_manager = ServiceManager {
-            arc: Mutex::new(SetLock::new()),
+            weak: Mutex::new(SetLock::new()),
             services: self.services,
             background_tasks: Mutex::new(HashMap::new()),
             on_status_change: EventRepeater::new("service_manager_on_status_change").await,
         };
 
-        let self_arc = Arc::new(service_manager);
-        let self_arc_clone = Arc::clone(&self_arc);
+        let arc = Arc::new(service_manager);
+        let weak = Arc::downgrade(&arc);
 
-        let result = self_arc_clone.arc.lock().await.set(Arc::clone(&self_arc_clone));
-
+        let result = arc.weak.lock().await.set(weak);
         if let Err(err) = result {
             match err {
                 SetLockError::AlreadySet => {
-                    unreachable!("Unable to set ServiceManager's self-arc in ServiceManagerBuilder because it was already set. This should never happen. How did you...?");
+                    error!("Unable to set ServiceManager's Weak self-reference in ServiceManagerBuilder because it was already set. This should never happen. Shutting down ungracefully to prevent further undefined behavior.");
+                    unreachable!("Unable to set ServiceManager's Weak self-reference in ServiceManagerBuilder because it was already set.");
                 }
             }
         }
 
-        self_arc
+        arc
     }
 }
 
 pub struct ServiceManager {
-    arc: Mutex<SetLock<Arc<Self>>>,
+    weak: Mutex<SetLock<Weak<Self>>>,
     background_tasks: Mutex<HashMap<String, JoinHandle<()>>>,
 
     pub services: Vec<Arc<Mutex<dyn Service>>>,
@@ -326,10 +326,27 @@ impl ServiceManager {
         &self,
         service: &mut MutexGuard<'_, dyn Service>,
     ) -> Result<(), StartupError> {
-        let service_manager = Arc::clone(self.arc.lock().await.unwrap());
+        let lock = self.weak.lock().await;
+        let weak = match lock.get() {
+            Some(weak) => weak,
+            None => {
+                error!("ServiceManager's Weak self-reference was None while initializing service {}. This should never happen. Did you not use a ServiceManagerBuilder? Shutting down ungracefully to prevent further undefined behavior.", service.info().name);
+                unreachable!("ServiceManager's Weak self-reference was None while initializing service {}.", service.info().name);
+            }
+        };
+
+        // This can't fail because the Arc is guaranteed to be valid as long as &self is valid.
+        let arc = match weak.upgrade() {
+            Some(arc) => arc,
+            None => {
+                error!("ServiceManager's Weak self-reference could not be upgraded to Arc while initializing service {}. This should never happen. Shutting down ungracefully to prevent further undefined behavior.", service.info().name);
+                unreachable!("ServiceManager's Weak self-reference could not be upgraded to Arc while initializing service {}.", service.info().name);
+            }
+        };
+
 
         //TODO: Add to config instead of hardcoding duration
-        let start = service.start(service_manager);
+        let start = service.start(arc);
         let timeout_result = timeout(Duration::from_secs(10), start).await;
 
         match timeout_result {
