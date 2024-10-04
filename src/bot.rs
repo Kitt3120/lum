@@ -1,13 +1,26 @@
-use std::sync::Arc;
+use core::fmt;
+use std::{fmt::Display, sync::Arc};
 
-use log::info;
-use tokio::sync::Mutex;
+use log::error;
+use tokio::{signal, sync::Mutex};
 
-use crate::service::{types::LifetimedPinnedBoxedFuture, Service, ServiceManager, ServiceManagerBuilder};
+use crate::service::{
+    types::LifetimedPinnedBoxedFuture, OverallStatus, Service, ServiceManager, ServiceManagerBuilder,
+};
 
+#[derive(Debug, Clone, Copy)]
 pub enum ExitReason {
     SIGINT,
-    EssentialServiceFailed(String),
+    EssentialServiceFailed,
+}
+
+impl Display for ExitReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SIGINT => write!(f, "SIGINT"),
+            Self::EssentialServiceFailed => write!(f, "Essential Service Failed"),
+        }
+    }
 }
 
 pub struct BotBuilder {
@@ -72,15 +85,40 @@ impl Bot {
     }
 
     pub async fn join(&self) -> ExitReason {
-        match tokio::signal::ctrl_c().await {
-            Ok(_) => {
-                info!("Received SIGINT, {} will now shut down", self.name);
-            }
-            Err(error) => {
-                panic!("Error receiving SIGINT: {}\n{} will exit.", error, self.name);
-            }
-        }
+        let name_clone = self.name.clone();
+        let signal_task = tokio::spawn(async move {
+            let name = name_clone;
 
-        ExitReason::SIGINT
+            let result = signal::ctrl_c().await;
+            if let Err(error) = result {
+                error!(
+                    "Error receiving SIGINT: {}. {} will exit ungracefully immediately to prevent undefined behavior.",
+                    error, name
+                );
+                panic!("Error receiving SIGINT: {}", error);
+            }
+        });
+
+        let service_manager_clone = self.service_manager.clone();
+        let mut receiver = self
+            .service_manager
+            .on_status_change
+            .event
+            .subscribe_channel("t", 2, true, true)
+            .await;
+        let status_task = tokio::spawn(async move {
+            let service_manager = service_manager_clone;
+            while (receiver.receiver.recv().await).is_some() {
+                let overall_status = service_manager.overall_status().await;
+                if overall_status == OverallStatus::Unhealthy {
+                    return;
+                }
+            }
+        });
+
+        tokio::select! {
+            _ = signal_task => ExitReason::SIGINT,
+            _ = status_task => ExitReason::EssentialServiceFailed,
+        }
     }
 }

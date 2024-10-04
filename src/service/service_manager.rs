@@ -79,9 +79,9 @@ pub fn new() -> Self {
 
 pub struct ServiceManager {
     arc: Mutex<SetLock<Arc<Self>>>,
-    services: Vec<Arc<Mutex<dyn Service>>>,
     background_tasks: Mutex<HashMap<String, JoinHandle<()>>>,
 
+    pub services: Vec<Arc<Mutex<dyn Service>>>,
     pub on_status_change: Arc<EventRepeater<Status>>,
 }
 
@@ -225,9 +225,13 @@ impl ServiceManager {
         Box::pin(async move {
             for service in self.services.iter() {
                 let service = service.lock().await;
-                let status = service.info().status.get().await;
 
-                if !matches!(status, Status::Started) {
+                if service.info().priority != Priority::Essential {
+                    continue;
+                }
+
+                let status = service.info().status.get().await;
+                if status != Status::Started {
                     return OverallStatus::Unhealthy;
                 }
             }
@@ -237,15 +241,15 @@ impl ServiceManager {
     }
 
     //TODO: When Rust allows async closures, refactor this to use iterator methods instead of for loop
-    pub fn status_tree(&self) -> LifetimedPinnedBoxedFuture<'_, String> {
+    pub fn status_overview(&self) -> LifetimedPinnedBoxedFuture<'_, String> {
         Box::pin(async move {
             let mut text_buffer = String::new();
 
-            let mut failed_essentials = String::new();
-            let mut failed_optionals = String::new();
-            let mut non_failed_essentials = String::new();
-            let mut non_failed_optionals = String::new();
-            let mut others = String::new();
+            let mut failed_essentials = Vec::new();
+            let mut failed_optionals = Vec::new();
+            let mut non_failed_essentials = Vec::new();
+            let mut non_failed_optionals = Vec::new();
+            let mut others = Vec::new();
 
             for service in self.services.iter() {
                 let service = service.lock().await;
@@ -256,52 +260,63 @@ impl ServiceManager {
                 match status {
                     Status::Started | Status::Stopped => match priority {
                         Priority::Essential => {
-                            non_failed_essentials.push_str(&format!(" - {}: {}\n", info.name, status));
+                            non_failed_essentials.push(format!(" - {}: {}", info.name, status));
                         }
                         Priority::Optional => {
-                            non_failed_optionals.push_str(&format!(" - {}: {}\n", info.name, status));
+                            non_failed_optionals.push(format!(" - {}: {}", info.name, status));
                         }
                     },
                     Status::FailedToStart(_) | Status::FailedToStop(_) | Status::RuntimeError(_) => {
                         match priority {
                             Priority::Essential => {
-                                failed_essentials.push_str(&format!(" - {}: {}\n", info.name, status));
+                                failed_essentials.push(format!(" - {}: {}", info.name, status));
                             }
                             Priority::Optional => {
-                                failed_optionals.push_str(&format!(" - {}: {}\n", info.name, status));
+                                failed_optionals.push(format!(" - {}: {}", info.name, status));
                             }
                         }
                     }
                     _ => {
-                        others.push_str(&format!(" - {}: {}\n", info.name, status));
+                        others.push(format!(" - {}: {}", info.name, status));
                     }
                 }
             }
 
             if !failed_essentials.is_empty() {
-                text_buffer.push_str(&format!("- {}:\n", "Failed essential services"));
-                text_buffer.push_str(&failed_essentials);
+                text_buffer.push_str(&format!("{}:\n", "Failed essential services"));
+                text_buffer.push_str(failed_essentials.join("\n").as_str());
             }
 
             if !failed_optionals.is_empty() {
-                text_buffer.push_str(&format!("- {}:\n", "Failed optional services"));
-                text_buffer.push_str(&failed_optionals);
+                text_buffer.push_str(&format!("{}:\n", "Failed optional services"));
+                text_buffer.push_str(failed_optionals.join("\n").as_str());
             }
 
             if !non_failed_essentials.is_empty() {
-                text_buffer.push_str(&format!("- {}:\n", "Essential services"));
-                text_buffer.push_str(&non_failed_essentials);
+                text_buffer.push_str(&format!("{}:\n", "Essential services"));
+                text_buffer.push_str(non_failed_essentials.join("\n").as_str());
             }
 
             if !non_failed_optionals.is_empty() {
-                text_buffer.push_str(&format!("- {}:\n", "Optional services"));
-                text_buffer.push_str(&non_failed_optionals);
+                text_buffer.push_str(&format!("{}:\n", "Optional services"));
+                text_buffer.push_str(non_failed_optionals.join("\n").as_str());
             }
 
             if !others.is_empty() {
-                text_buffer.push_str(&format!("- {}:\n", "Other services"));
-                text_buffer.push_str(&others);
+                text_buffer.push_str(&format!("{}:\n", "Other services"));
+                text_buffer.push_str(others.join("\n").as_str());
             }
+
+            let longest_width = text_buffer
+                .lines()
+                .map(|line| line.len())
+                .max()
+                .unwrap_or(0);
+            
+            let mut headline = String::from("Status overview\n");
+            headline.push_str("─".repeat(longest_width).as_str());
+            headline.push('\n');
+            text_buffer.insert_str(0, &headline);
 
             text_buffer
         })

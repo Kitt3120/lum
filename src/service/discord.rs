@@ -97,7 +97,6 @@ impl Service for DiscordService {
                 return Err(format!("Failed to set ws_url SetLock: {}", error).into());
             }
 
-            info!("Connecting to Discord");
             let client_handle = spawn(async move { client.start().await });
 
             select! {
@@ -120,39 +119,21 @@ impl Service for DiscordService {
             if let Some(client_handle) = self.client_handle.take() {
                 info!("Waiting for Discord client to stop...");
 
-                client_handle.abort();
-                let result = convert_thread_result(client_handle).await;
+                client_handle.abort(); // Should trigger a JoinError in the client_handle, if the task hasn't already ended
+
+                // If the thread ended WITHOUT a JoinError, the client already stopped unexpectedly
+                let result = async move {
+                    match client_handle.await {
+                        Ok(result) => result,
+                        Err(_) => Ok(()),
+                    }
+                }
+                .await;
                 result?;
             }
 
             Ok(())
         })
-    }
-
-    fn task<'a>(&self) -> Option<LifetimedPinnedBoxedFutureResult<'a, ()>> {
-        Some(Box::pin(async move {
-            let mut i = 0;
-            loop {
-                sleep(Duration::from_secs(1)).await;
-                if i < 5 {
-                    i += 1;
-                    info!("Wohoo!");
-                } else {
-                    info!("Bye!");
-                    break;
-                }
-            }
-
-            Err("Sheesh".into())
-        }))
-    }
-}
-
-// If the thread ended WITHOUT a JoinError from aborting, the client already stopped unexpectedly
-async fn convert_thread_result(client_handle: JoinHandle<Result<(), Error>>) -> Result<(), Error> {
-    match client_handle.await {
-        Ok(result) => result,
-        Err(_) => Ok(()),
     }
 }
 
