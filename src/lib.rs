@@ -21,9 +21,7 @@ pub async fn run(mut bot: Bot) {
     }
 
     let now = SystemTime::now();
-
     bot.start().await;
-
     match now.elapsed() {
         Ok(elapsed) => info!("Startup took {}ms", elapsed.as_millis()),
         Err(error) => {
@@ -36,21 +34,34 @@ pub async fn run(mut bot: Bot) {
     };
 
     if bot.service_manager.overall_status().await != OverallStatus::Healthy {
-        let status_tree = bot.service_manager.status_tree().await;
+        let status_overview = bot.service_manager.status_overview().await;
 
-        error!("{} is not healthy! Some essential services did not start up successfully. Please check the logs.\nService status tree:\n{}\n{} will exit.",
+        error!("{} is not healthy! Some essential services did not start up successfully. {} will now exit ungracefully.\n\n{}",
         bot.name,
-        status_tree,
-        bot.name);
+        bot.name,
+        status_overview);
         return;
     }
 
     info!("{} is alive", bot.name,);
 
     //TODO: Add CLI commands
+
     let exit_reason = bot.join().await;
+    match exit_reason {
+        bot::ExitReason::SIGINT => info!(
+            "{} received a SIGINT signal! Attempting to shut down gracefully.",
+            bot.name
+        ),
+        bot::ExitReason::EssentialServiceFailed => {
+            let status_overview = bot.service_manager.status_overview().await;
+            error!(
+                "An essential service failed! Attempting to shut down gracefully.\n{}",
+                status_overview
+            );
+        }
+    }
 
     bot.stop().await;
-
-    info!("{} has shut down", bot.name);
+    info!("Oyasumi 💤");
 }
