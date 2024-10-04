@@ -1,3 +1,4 @@
+use super::types::LifetimedPinnedBoxedFuture;
 use log::error;
 use serenity::FutureExt;
 use std::{future::Future, mem::replace, sync::Arc};
@@ -6,15 +7,14 @@ use tokio::sync::{
     Mutex,
 };
 
-use super::PinnedBoxedFuture;
-
+//TODO: Rename to TaskChain and use Event<T> instead of manual subscriber handling
 pub struct Watchdog<'a, T: Send> {
-    task: PinnedBoxedFuture<'a, T>,
+    task: LifetimedPinnedBoxedFuture<'a, T>,
     subscribers: Arc<Mutex<Vec<Sender<Arc<T>>>>>,
 }
 
 impl<'a, T: 'a + Send> Watchdog<'a, T> {
-    pub fn new(task: PinnedBoxedFuture<'a, T>) -> Self {
+    pub fn new(task: LifetimedPinnedBoxedFuture<'a, T>) -> Self {
         Self {
             task,
             subscribers: Arc::new(Mutex::new(Vec::new())),

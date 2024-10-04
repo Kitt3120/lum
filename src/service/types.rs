@@ -2,23 +2,28 @@ use std::{error::Error, fmt::Display, future::Future, pin::Pin};
 
 use thiserror::Error;
 
+use crate::event::event_repeater::{AttachError, DetachError};
+
 pub type BoxedError = Box<dyn Error + Send + Sync>;
 
-pub type BoxedFuture<'a, T> = Box<dyn Future<Output = T> + Send + 'a>;
-pub type BoxedFutureResult<'a, T> = BoxedFuture<'a, Result<T, BoxedError>>;
+pub type BoxedFuture<T> = Box<dyn Future<Output = T> + Send>;
+pub type BoxedFutureResult<T> = BoxedFuture<Result<T, BoxedError>>;
 
-pub type PinnedBoxedFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-pub type PinnedBoxedFutureResult<'a, T> = PinnedBoxedFuture<'a, Result<T, BoxedError>>;
+pub type PinnedBoxedFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
+pub type PinnedBoxedFutureResult<T> = PinnedBoxedFuture<Result<T, BoxedError>>;
 
-#[derive(Debug)]
+pub type LifetimedPinnedBoxedFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+pub type LifetimedPinnedBoxedFutureResult<'a, T> = LifetimedPinnedBoxedFuture<'a, Result<T, BoxedError>>;
+
+#[derive(Debug, Clone)]
 pub enum Status {
     Started,
     Stopped,
     Starting,
     Stopping,
-    FailedToStart(BoxedError), //TODO: Test out if it'd be better to use a String instead
-    FailedToStop(BoxedError),
-    RuntimeError(BoxedError),
+    FailedToStart(String),
+    FailedToStop(String),
+    RuntimeError(String),
 }
 
 impl Display for Status {
@@ -86,10 +91,18 @@ impl Display for Priority {
 pub enum StartupError {
     #[error("Service {0} is not managed by this Service Manager")]
     ServiceNotManaged(String),
-    #[error("Service {0} already has a background task running")]
-    BackgroundTaskAlreadyRunning(String),
+
     #[error("Service {0} is not stopped")]
     ServiceNotStopped(String),
+
+    #[error("Service {0} already has a background task running")]
+    BackgroundTaskAlreadyRunning(String),
+
+    #[error(
+        "Failed to attach Service Manager's status_change EventRepeater to {0}'s status_change Event: {1}"
+    )]
+    StatusAttachmentFailed(String, AttachError),
+
     #[error("Service {0} failed to start")]
     FailedToStartService(String),
 }
@@ -98,8 +111,15 @@ pub enum StartupError {
 pub enum ShutdownError {
     #[error("Service {0} is not managed by this Service Manager")]
     ServiceNotManaged(String),
+
     #[error("Service {0} is not started")]
     ServiceNotStarted(String),
+
     #[error("Service {0} failed to stop")]
     FailedToStopService(String),
+
+    #[error(
+        "Failed to detach Service Manager's status_change EventRepeater from {0}'s status_change Event: {1}"
+    )]
+    StatusDetachmentFailed(String, DetachError),
 }
