@@ -1,7 +1,5 @@
-use crate::setlock::SetLock;
-
 use super::{types::LifetimedPinnedBoxedFutureResult, Priority, Service, ServiceInfo, ServiceManager};
-use log::{error, info};
+use log::{error, info, warn};
 use serenity::{
     all::{GatewayIntents, Ready},
     async_trait,
@@ -12,7 +10,10 @@ use serenity::{
     prelude::TypeMap,
     Client, Error,
 };
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 use tokio::{
     select, spawn,
     sync::{Mutex, Notify, RwLock},
@@ -24,14 +25,14 @@ use tokio::{
 pub struct DiscordService {
     info: ServiceInfo,
     discord_token: String,
-    pub ready: Arc<Mutex<SetLock<Ready>>>,
+    pub ready: Arc<OnceLock<Ready>>,
     client_handle: Option<JoinHandle<Result<(), Error>>>,
-    pub cache: SetLock<Arc<Cache>>,
-    pub data: SetLock<Arc<RwLock<TypeMap>>>,
-    pub http: SetLock<Arc<Http>>,
-    pub shard_manager: SetLock<Arc<ShardManager>>,
-    pub voice_manager: SetLock<Arc<dyn VoiceGatewayManager>>,
-    pub ws_url: SetLock<Arc<Mutex<String>>>,
+    pub cache: OnceLock<Arc<Cache>>,
+    pub data: OnceLock<Arc<RwLock<TypeMap>>>,
+    pub http: OnceLock<Arc<Http>>,
+    pub shard_manager: OnceLock<Arc<ShardManager>>,
+    pub voice_manager: OnceLock<Arc<dyn VoiceGatewayManager>>,
+    pub ws_url: OnceLock<Arc<Mutex<String>>>,
 }
 
 impl DiscordService {
@@ -39,14 +40,14 @@ impl DiscordService {
         Self {
             info: ServiceInfo::new("lum_builtin_discord", "Discord", Priority::Essential),
             discord_token: discord_token.to_string(),
-            ready: Arc::new(Mutex::new(SetLock::new())),
+            ready: Arc::new(OnceLock::new()),
             client_handle: None,
-            cache: SetLock::new(),
-            data: SetLock::new(),
-            http: SetLock::new(),
-            shard_manager: SetLock::new(),
-            voice_manager: SetLock::new(),
-            ws_url: SetLock::new(),
+            cache: OnceLock::new(),
+            data: OnceLock::new(),
+            http: OnceLock::new(),
+            shard_manager: OnceLock::new(),
+            voice_manager: OnceLock::new(),
+            ws_url: OnceLock::new(),
         }
     }
 }
@@ -71,30 +72,38 @@ impl Service for DiscordService {
                 ))
                 .await?;
 
-            if let Err(error) = self.cache.set(Arc::clone(&client.cache)) {
-                return Err(format!("Failed to set cache SetLock: {}", error).into());
+            if self.cache.set(Arc::clone(&client.cache)).is_err() {
+                error!("Could not set cache OnceLock because it was already set. This should never happen.");
+                return Err("Could not set cache OnceLock because it was already set.".into());
             }
 
-            if let Err(error) = self.data.set(Arc::clone(&client.data)) {
-                return Err(format!("Failed to set data SetLock: {}", error).into());
+            if self.data.set(Arc::clone(&client.data)).is_err() {
+                error!("Could not set data OnceLock because it was already set. This should never happen.");
+                return Err("Could not set data OnceLock because it was already set.".into());
             }
 
-            if let Err(error) = self.http.set(Arc::clone(&client.http)) {
-                return Err(format!("Failed to set http SetLock: {}", error).into());
+            if self.http.set(Arc::clone(&client.http)).is_err() {
+                error!("Could not set http OnceLock because it was already set. This should never happen.");
+                return Err("Could not set http OnceLock because it was already set.".into());
             }
 
-            if let Err(error) = self.shard_manager.set(Arc::clone(&client.shard_manager)) {
-                return Err(format!("Failed to set shard_manager SetLock: {}", error).into());
+            if self.shard_manager.set(Arc::clone(&client.shard_manager)).is_err() {
+                error!("Could not set shard_manager OnceLock because it was already set. This should never happen.");
+                return Err("Could not set shard_manager OnceLock because it was already set.".into());
             }
 
             if let Some(voice_manager) = &client.voice_manager {
-                if let Err(error) = self.voice_manager.set(Arc::clone(voice_manager)) {
-                    return Err(format!("Failed to set voice_manager SetLock: {}", error).into());
+                if self.voice_manager.set(Arc::clone(voice_manager)).is_err() {
+                    error!("Could not set voice_manager OnceLock because it was already set. This should never happen.");
+                    return Err("Could not set voice_manager OnceLock because it was already set.".into());
                 }
+            } else {
+                warn!("Voice manager is not available");
             }
 
-            if let Err(error) = self.ws_url.set(Arc::clone(&client.ws_url)) {
-                return Err(format!("Failed to set ws_url SetLock: {}", error).into());
+            if self.ws_url.set(Arc::clone(&client.ws_url)).is_err() {
+                error!("Could not set ws_url OnceLock because it was already set. This should never happen.");
+                return Err("Could not set ws_url OnceLock because it was already set.".into());
             }
 
             let client_handle = spawn(async move { client.start().await });
@@ -138,12 +147,12 @@ impl Service for DiscordService {
 }
 
 struct EventHandler {
-    client: Arc<Mutex<SetLock<Ready>>>,
+    client: Arc<OnceLock<Ready>>,
     ready_notify: Arc<Notify>,
 }
 
 impl EventHandler {
-    pub fn new(client: Arc<Mutex<SetLock<Ready>>>, ready_notify: Arc<Notify>) -> Self {
+    pub fn new(client: Arc<OnceLock<Ready>>, ready_notify: Arc<Notify>) -> Self {
         Self { client, ready_notify }
     }
 }
@@ -152,9 +161,9 @@ impl EventHandler {
 impl client::EventHandler for EventHandler {
     async fn ready(&self, _ctx: Context, data_about_bot: Ready) {
         info!("Connected to Discord as {}", data_about_bot.user.tag());
-        if let Err(error) = self.client.lock().await.set(data_about_bot) {
-            error!("Failed to set client SetLock: {}", error);
-            panic!("Failed to set client SetLock: {}", error);
+        if self.client.set(data_about_bot).is_err() {
+            error!("Could not set client OnceLock because it was already set. This should never happen.");
+            panic!("Could not set client OnceLock because it was already set");
         }
         self.ready_notify.notify_one();
     }
