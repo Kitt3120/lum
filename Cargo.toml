@@ -1,6 +1,6 @@
 [package]
 name = "lum"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["Torben Schweren"]
 edition = "2021"
 rust-version = "1.80.0"
@@ -9,7 +9,6 @@ readme = "README.md"
 repository = "https://github.com/Kitt3120/lum"
 license= "MIT"
 keywords = ["chat", "discord", "bot", "framework"]
-categories = ["chat", "discord", "framework"]
 
 [profile.release]
 debug = false
