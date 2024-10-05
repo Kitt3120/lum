@@ -1,4 +1,3 @@
-use super::types::LifetimedPinnedBoxedFuture;
 use log::error;
 use serenity::FutureExt;
 use std::{future::Future, mem::replace, sync::Arc};
@@ -6,6 +5,8 @@ use tokio::sync::{
     mpsc::{channel, Receiver, Sender},
     Mutex,
 };
+
+use super::LifetimedPinnedBoxedFuture;
 
 //TODO: Rename to TaskChain and use Event<T> instead of manual subscriber handling
 pub struct Watchdog<'a, T: Send> {
@@ -23,8 +24,8 @@ impl<'a, T: 'a + Send> Watchdog<'a, T> {
 
     pub fn append<FN, FUT>(&mut self, task: FN)
     where
-        FN: FnOnce(T) -> FUT + Send + 'a,
-        FUT: Future<Output = T> + Send + 'a,
+        FN: FnOnce(T) -> FUT + Send + Sync + 'a,
+        FUT: Future<Output = T> + Send + Sync + 'a,
     {
         let previous_task = replace(
             &mut self.task,

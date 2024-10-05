@@ -1,4 +1,4 @@
-use super::{types::LifetimedPinnedBoxedFutureResult, Priority, Service, ServiceInfo, ServiceManager};
+use super::{BoxedError, Priority, Service, ServiceInfo, ServiceManager};
 use log::{error, info, warn};
 use serenity::{
     all::{GatewayIntents, Ready},
@@ -52,97 +52,97 @@ impl DiscordService {
     }
 }
 
+//TODO: When Rust allows async trait methods to be object-safe, refactor this to not use async_trait anymore
+#[async_trait]
 impl Service for DiscordService {
     fn info(&self) -> &ServiceInfo {
         &self.info
     }
 
-    fn start(&mut self, _service_manager: Arc<ServiceManager>) -> LifetimedPinnedBoxedFutureResult<'_, ()> {
-        Box::pin(async move {
-            let client_ready_notify = Arc::new(Notify::new());
+    async fn start(&mut self, _service_manager: Arc<ServiceManager>) -> Result<(), BoxedError> {
+        let client_ready_notify = Arc::new(Notify::new());
 
-            let framework = StandardFramework::new();
-            framework.configure(Configuration::new().prefix("!"));
+        let framework = StandardFramework::new();
+        framework.configure(Configuration::new().prefix("!"));
 
-            let mut client = Client::builder(self.discord_token.as_str(), GatewayIntents::all())
-                .framework(framework)
-                .event_handler(EventHandler::new(
-                    Arc::clone(&self.ready),
-                    Arc::clone(&client_ready_notify),
-                ))
-                .await?;
+        let mut client = Client::builder(self.discord_token.as_str(), GatewayIntents::all())
+            .framework(framework)
+            .event_handler(EventHandler::new(
+                Arc::clone(&self.ready),
+                Arc::clone(&client_ready_notify),
+            ))
+            .await?;
 
-            if self.cache.set(Arc::clone(&client.cache)).is_err() {
-                error!("Could not set cache OnceLock because it was already set. This should never happen.");
-                return Err("Could not set cache OnceLock because it was already set.".into());
+        if self.cache.set(Arc::clone(&client.cache)).is_err() {
+            error!("Could not set cache OnceLock because it was already set. This should never happen.");
+            return Err("Could not set cache OnceLock because it was already set.".into());
+        }
+
+        if self.data.set(Arc::clone(&client.data)).is_err() {
+            error!("Could not set data OnceLock because it was already set. This should never happen.");
+            return Err("Could not set data OnceLock because it was already set.".into());
+        }
+
+        if self.http.set(Arc::clone(&client.http)).is_err() {
+            error!("Could not set http OnceLock because it was already set. This should never happen.");
+            return Err("Could not set http OnceLock because it was already set.".into());
+        }
+
+        if self.shard_manager.set(Arc::clone(&client.shard_manager)).is_err() {
+            error!(
+                "Could not set shard_manager OnceLock because it was already set. This should never happen."
+            );
+            return Err("Could not set shard_manager OnceLock because it was already set.".into());
+        }
+
+        if let Some(voice_manager) = &client.voice_manager {
+            if self.voice_manager.set(Arc::clone(voice_manager)).is_err() {
+                error!("Could not set voice_manager OnceLock because it was already set. This should never happen.");
+                return Err("Could not set voice_manager OnceLock because it was already set.".into());
             }
+        } else {
+            warn!("Voice manager is not available");
+        }
 
-            if self.data.set(Arc::clone(&client.data)).is_err() {
-                error!("Could not set data OnceLock because it was already set. This should never happen.");
-                return Err("Could not set data OnceLock because it was already set.".into());
-            }
+        if self.ws_url.set(Arc::clone(&client.ws_url)).is_err() {
+            error!("Could not set ws_url OnceLock because it was already set. This should never happen.");
+            return Err("Could not set ws_url OnceLock because it was already set.".into());
+        }
 
-            if self.http.set(Arc::clone(&client.http)).is_err() {
-                error!("Could not set http OnceLock because it was already set. This should never happen.");
-                return Err("Could not set http OnceLock because it was already set.".into());
-            }
+        let client_handle = spawn(async move { client.start().await });
 
-            if self.shard_manager.set(Arc::clone(&client.shard_manager)).is_err() {
-                error!("Could not set shard_manager OnceLock because it was already set. This should never happen.");
-                return Err("Could not set shard_manager OnceLock because it was already set.".into());
-            }
+        select! {
+            _ = client_ready_notify.notified() => {},
+            _ = sleep(Duration::from_secs(2)) => {},
+        }
 
-            if let Some(voice_manager) = &client.voice_manager {
-                if self.voice_manager.set(Arc::clone(voice_manager)).is_err() {
-                    error!("Could not set voice_manager OnceLock because it was already set. This should never happen.");
-                    return Err("Could not set voice_manager OnceLock because it was already set.".into());
-                }
-            } else {
-                warn!("Voice manager is not available");
-            }
+        if client_handle.is_finished() {
+            client_handle.await??;
+            return Err("Discord client stopped unexpectedly".into());
+        }
 
-            if self.ws_url.set(Arc::clone(&client.ws_url)).is_err() {
-                error!("Could not set ws_url OnceLock because it was already set. This should never happen.");
-                return Err("Could not set ws_url OnceLock because it was already set.".into());
-            }
-
-            let client_handle = spawn(async move { client.start().await });
-
-            select! {
-                _ = client_ready_notify.notified() => {},
-                _ = sleep(Duration::from_secs(2)) => {},
-            }
-
-            if client_handle.is_finished() {
-                client_handle.await??;
-                return Err("Discord client stopped unexpectedly".into());
-            }
-
-            self.client_handle = Some(client_handle);
-            Ok(())
-        })
+        self.client_handle = Some(client_handle);
+        Ok(())
     }
 
-    fn stop(&mut self) -> LifetimedPinnedBoxedFutureResult<'_, ()> {
-        Box::pin(async move {
-            if let Some(client_handle) = self.client_handle.take() {
-                info!("Waiting for Discord client to stop...");
+    async fn stop(&mut self) -> Result<(), BoxedError> {
+        if let Some(client_handle) = self.client_handle.take() {
+            info!("Waiting for Discord client to stop...");
 
-                client_handle.abort(); // Should trigger a JoinError in the client_handle, if the task hasn't already ended
+            client_handle.abort(); // Should trigger a JoinError in the client_handle, if the task hasn't already ended
 
-                // If the thread ended WITHOUT a JoinError, the client already stopped unexpectedly
-                let result = async move {
-                    match client_handle.await {
-                        Ok(result) => result,
-                        Err(_) => Ok(()),
-                    }
+            // If the thread ended WITHOUT a JoinError, the client already stopped unexpectedly
+            let result = async move {
+                match client_handle.await {
+                    Ok(result) => result,
+                    Err(_) => Ok(()),
                 }
-                .await;
-                result?;
             }
+            .await;
+            result?;
+        }
 
-            Ok(())
-        })
+        Ok(())
     }
 }
 
@@ -157,6 +157,7 @@ impl EventHandler {
     }
 }
 
+//TODO: When Rust allows async trait methods to be object-safe, refactor this to not use async_trait anymore
 #[async_trait]
 impl client::EventHandler for EventHandler {
     async fn ready(&self, _ctx: Context, data_about_bot: Ready) {

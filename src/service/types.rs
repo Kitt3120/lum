@@ -1,4 +1,9 @@
-use std::{error::Error, fmt::Display, future::Future, pin::Pin};
+use std::{
+    error::Error,
+    fmt::{self, Display},
+    future::Future,
+    pin::Pin,
+};
 
 use thiserror::Error;
 
@@ -6,13 +11,10 @@ use crate::event::event_repeater::{AttachError, DetachError};
 
 pub type BoxedError = Box<dyn Error + Send + Sync>;
 
-pub type BoxedFuture<T> = Box<dyn Future<Output = T> + Send>;
-pub type BoxedFutureResult<T> = BoxedFuture<Result<T, BoxedError>>;
-
-pub type PinnedBoxedFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
+pub type PinnedBoxedFuture<T> = Pin<Box<dyn Future<Output = T> + Send + Sync>>;
 pub type PinnedBoxedFutureResult<T> = PinnedBoxedFuture<Result<T, BoxedError>>;
 
-pub type LifetimedPinnedBoxedFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+pub type LifetimedPinnedBoxedFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + Sync + 'a>>;
 pub type LifetimedPinnedBoxedFutureResult<'a, T> = LifetimedPinnedBoxedFuture<'a, Result<T, BoxedError>>;
 
 #[derive(Debug, Clone)]
@@ -27,7 +29,7 @@ pub enum Status {
 }
 
 impl Display for Status {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Status::Started => write!(f, "Started"),
             Status::Stopped => write!(f, "Stopped"),
@@ -64,7 +66,7 @@ pub enum OverallStatus {
 }
 
 impl Display for OverallStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             OverallStatus::Healthy => write!(f, "Healthy"),
             OverallStatus::Unhealthy => write!(f, "Unhealthy"),
@@ -79,7 +81,7 @@ pub enum Priority {
 }
 
 impl Display for Priority {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Priority::Essential => write!(f, "Essential"),
             Priority::Optional => write!(f, "Optional"),

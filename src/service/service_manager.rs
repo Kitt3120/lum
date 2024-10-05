@@ -1,12 +1,12 @@
 use super::{
     service::Service,
-    types::{LifetimedPinnedBoxedFuture, OverallStatus, Priority, ShutdownError, StartupError, Status},
+    types::{OverallStatus, Priority, ShutdownError, StartupError, Status},
 };
 use crate::{
     event::EventRepeater, service::Watchdog
 };
 use log::{error, info, warn};
-use std::{collections::HashMap, fmt::Display, mem, sync::{Arc, OnceLock, Weak}, time::Duration};
+use std::{collections::HashMap, fmt::{self, Display}, mem, sync::{Arc, OnceLock, Weak}, time::Duration};
 use tokio::{
     spawn,
     sync::{Mutex, MutexGuard},
@@ -217,105 +217,101 @@ impl ServiceManager {
     }
 
     //TODO: When Rust allows async closures, refactor this to use iterator methods instead of for loop
-    pub fn overall_status(&self) -> LifetimedPinnedBoxedFuture<'_, OverallStatus> {
-        Box::pin(async move {
-            for service in self.services.iter() {
-                let service = service.lock().await;
+    pub async fn overall_status(&self) -> OverallStatus {
+        for service in self.services.iter() {
+            let service = service.lock().await;
 
-                if service.info().priority != Priority::Essential {
-                    continue;
-                }
-
-                let status = service.info().status.get().await;
-                if status != Status::Started {
-                    return OverallStatus::Unhealthy;
-                }
+            if service.info().priority != Priority::Essential {
+                continue;
             }
 
-            OverallStatus::Healthy
-        })
+            let status = service.info().status.get().await;
+            if status != Status::Started {
+                return OverallStatus::Unhealthy;
+            }
+        }
+
+        OverallStatus::Healthy
     }
 
     //TODO: When Rust allows async closures, refactor this to use iterator methods instead of for loop
-    pub fn status_overview(&self) -> LifetimedPinnedBoxedFuture<'_, String> {
-        Box::pin(async move {
-            let mut text_buffer = String::new();
+    pub async fn status_overview(&self) -> String {
+        let mut text_buffer = String::new();
 
-            let mut failed_essentials = Vec::new();
-            let mut failed_optionals = Vec::new();
-            let mut non_failed_essentials = Vec::new();
-            let mut non_failed_optionals = Vec::new();
-            let mut others = Vec::new();
+        let mut failed_essentials = Vec::new();
+        let mut failed_optionals = Vec::new();
+        let mut non_failed_essentials = Vec::new();
+        let mut non_failed_optionals = Vec::new();
+        let mut others = Vec::new();
 
-            for service in self.services.iter() {
-                let service = service.lock().await;
-                let info = service.info();
-                let priority = &info.priority;
-                let status = info.status.get().await;
+        for service in self.services.iter() {
+            let service = service.lock().await;
+            let info = service.info();
+            let priority = &info.priority;
+            let status = info.status.get().await;
 
-                match status {
-                    Status::Started | Status::Stopped => match priority {
+            match status {
+                Status::Started | Status::Stopped => match priority {
+                    Priority::Essential => {
+                        non_failed_essentials.push(format!(" - {}: {}", info.name, status));
+                    }
+                    Priority::Optional => {
+                        non_failed_optionals.push(format!(" - {}: {}", info.name, status));
+                    }
+                },
+                Status::FailedToStart(_) | Status::FailedToStop(_) | Status::RuntimeError(_) => {
+                    match priority {
                         Priority::Essential => {
-                            non_failed_essentials.push(format!(" - {}: {}", info.name, status));
+                            failed_essentials.push(format!(" - {}: {}", info.name, status));
                         }
                         Priority::Optional => {
-                            non_failed_optionals.push(format!(" - {}: {}", info.name, status));
+                            failed_optionals.push(format!(" - {}: {}", info.name, status));
                         }
-                    },
-                    Status::FailedToStart(_) | Status::FailedToStop(_) | Status::RuntimeError(_) => {
-                        match priority {
-                            Priority::Essential => {
-                                failed_essentials.push(format!(" - {}: {}", info.name, status));
-                            }
-                            Priority::Optional => {
-                                failed_optionals.push(format!(" - {}: {}", info.name, status));
-                            }
-                        }
-                    }
-                    _ => {
-                        others.push(format!(" - {}: {}", info.name, status));
                     }
                 }
+                _ => {
+                    others.push(format!(" - {}: {}", info.name, status));
+                }
             }
+        }
 
-            if !failed_essentials.is_empty() {
-                text_buffer.push_str(&format!("{}:\n", "Failed essential services"));
-                text_buffer.push_str(failed_essentials.join("\n").as_str());
-            }
+        if !failed_essentials.is_empty() {
+            text_buffer.push_str(&format!("{}:\n", "Failed essential services"));
+            text_buffer.push_str(failed_essentials.join("\n").as_str());
+        }
 
-            if !failed_optionals.is_empty() {
-                text_buffer.push_str(&format!("{}:\n", "Failed optional services"));
-                text_buffer.push_str(failed_optionals.join("\n").as_str());
-            }
+        if !failed_optionals.is_empty() {
+            text_buffer.push_str(&format!("{}:\n", "Failed optional services"));
+            text_buffer.push_str(failed_optionals.join("\n").as_str());
+        }
 
-            if !non_failed_essentials.is_empty() {
-                text_buffer.push_str(&format!("{}:\n", "Essential services"));
-                text_buffer.push_str(non_failed_essentials.join("\n").as_str());
-            }
+        if !non_failed_essentials.is_empty() {
+            text_buffer.push_str(&format!("{}:\n", "Essential services"));
+            text_buffer.push_str(non_failed_essentials.join("\n").as_str());
+        }
 
-            if !non_failed_optionals.is_empty() {
-                text_buffer.push_str(&format!("{}:\n", "Optional services"));
-                text_buffer.push_str(non_failed_optionals.join("\n").as_str());
-            }
+        if !non_failed_optionals.is_empty() {
+            text_buffer.push_str(&format!("{}:\n", "Optional services"));
+            text_buffer.push_str(non_failed_optionals.join("\n").as_str());
+        }
 
-            if !others.is_empty() {
-                text_buffer.push_str(&format!("{}:\n", "Other services"));
-                text_buffer.push_str(others.join("\n").as_str());
-            }
+        if !others.is_empty() {
+            text_buffer.push_str(&format!("{}:\n", "Other services"));
+            text_buffer.push_str(others.join("\n").as_str());
+        }
 
-            let longest_width = text_buffer
-                .lines()
-                .map(|line| line.len())
-                .max()
-                .unwrap_or(0);
-            
-            let mut headline = String::from("Status overview\n");
-            headline.push_str("─".repeat(longest_width).as_str());
-            headline.push('\n');
-            text_buffer.insert_str(0, &headline);
+        let longest_width = text_buffer
+            .lines()
+            .map(|line| line.len())
+            .max()
+            .unwrap_or(0);
+        
+        let mut headline = String::from("Status overview\n");
+        headline.push_str("─".repeat(longest_width).as_str());
+        headline.push('\n');
+        text_buffer.insert_str(0, &headline);
 
-            text_buffer
-        })
+        text_buffer
     }
 
     async fn init_service(
@@ -486,7 +482,7 @@ impl ServiceManager {
 }
 
 impl Display for ServiceManager {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Services: ")?;
 
         if self.services.is_empty() {
