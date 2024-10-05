@@ -2,6 +2,8 @@
   <img src="https://raw.githubusercontent.com/Kitt3120/lum/development/.github/assets/portrait.png" width="512">
 </p>
 
+test
+
 # lum
 
 Lum Discord Bot
