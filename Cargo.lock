@@ -1180,7 +1180,7 @@ dependencies = [
 
 [[package]]
 name = "lum"
-version = "0.3.4"
+version = "0.3.7"
 dependencies = [
  "async-trait",
  "dirs",

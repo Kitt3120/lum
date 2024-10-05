@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Kitt3120/lum/main/.github/assets/portrait.png" width="512">
+  <img src="https://raw.githubusercontent.com/Kitt3120/lum/development/.github/assets/portrait.png" width="512">
 </p>
 
 # lum
