@@ -9,7 +9,6 @@ readme = "README.md"
 repository = "https://github.com/Kitt3120/lum"
 license= "MIT"
 keywords = ["chat", "discord", "bot", "framework"]
-categories = ["chat", "discord", "framework"]
 
 [profile.release]
 debug = false
