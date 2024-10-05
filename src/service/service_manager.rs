@@ -2,11 +2,15 @@ use super::{
     service::Service,
     types::{OverallStatus, Priority, ShutdownError, StartupError, Status},
 };
-use crate::{
-    event::EventRepeater, service::Watchdog
-};
+use crate::{event::EventRepeater, service::Watchdog};
 use log::{error, info, warn};
-use std::{collections::HashMap, fmt::{self, Display}, mem, sync::{Arc, OnceLock, Weak}, time::Duration};
+use std::{
+    collections::HashMap,
+    fmt::{self, Display},
+    mem,
+    sync::{Arc, OnceLock, Weak},
+    time::Duration,
+};
 use tokio::{
     spawn,
     sync::{Mutex, MutexGuard},
@@ -20,8 +24,10 @@ pub struct ServiceManagerBuilder {
 }
 
 impl ServiceManagerBuilder {
-pub fn new() -> Self {
-        Self { services: Vec::new() }
+    pub fn new() -> Self {
+        Self {
+            services: Vec::new(),
+        }
     }
 
     //TODO: When Rust allows async closures, refactor this to use iterator methods instead of for loop
@@ -65,8 +71,8 @@ pub fn new() -> Self {
 
         let result = arc.weak.set(weak);
         if result.is_err() {
-                error!("Unable to set ServiceManager's Weak self-reference in ServiceManagerBuilder because it was already set. This should never happen. Shutting down ungracefully to prevent further undefined behavior.");
-                unreachable!("Unable to set ServiceManager's Weak self-reference in ServiceManagerBuilder because it was already set.");
+            error!("Unable to set ServiceManager's Weak self-reference in ServiceManagerBuilder because it was already set. This should never happen. Shutting down ungracefully to prevent further undefined behavior.");
+            unreachable!("Unable to set ServiceManager's Weak self-reference in ServiceManagerBuilder because it was already set.");
         }
 
         arc
@@ -86,8 +92,7 @@ impl ServiceManager {
         ServiceManagerBuilder::new()
     }
 
-    pub async fn manages_service(&self, service_id: &str) -> bool 
-    {
+    pub async fn manages_service(&self, service_id: &str) -> bool {
         for service in self.services.iter() {
             let service_lock = service.lock().await;
 
@@ -99,7 +104,10 @@ impl ServiceManager {
         false
     }
 
-    pub async fn start_service(&self, service: Arc<Mutex<dyn Service>>) -> Result<(), StartupError> {
+    pub async fn start_service(
+        &self,
+        service: Arc<Mutex<dyn Service>>,
+    ) -> Result<(), StartupError> {
         let service_id = service.lock().await.info().id.clone();
         if !self.manages_service(&service_id).await {
             return Err(StartupError::ServiceNotManaged(service_id.clone()));
@@ -113,13 +121,18 @@ impl ServiceManager {
         }
 
         if self.has_background_task_registered(&service_id).await {
-            return Err(StartupError::BackgroundTaskAlreadyRunning(service_id.clone()));
+            return Err(StartupError::BackgroundTaskAlreadyRunning(
+                service_id.clone(),
+            ));
         }
 
         let service_status_event = service_lock.info().status.as_ref();
         let attachment_result = self.on_status_change.attach(service_status_event, 2).await;
         if let Err(err) = attachment_result {
-            return Err(StartupError::StatusAttachmentFailed(service_id.clone(), err));
+            return Err(StartupError::StatusAttachmentFailed(
+                service_id.clone(),
+                err,
+            ));
         }
 
         service_lock.info().status.set(Status::Starting).await;
@@ -133,7 +146,10 @@ impl ServiceManager {
     }
 
     //TODO: Clean up
-    pub async fn stop_service(&self, service: Arc<Mutex<dyn Service>>) -> Result<(), ShutdownError> {
+    pub async fn stop_service(
+        &self,
+        service: Arc<Mutex<dyn Service>>,
+    ) -> Result<(), ShutdownError> {
         let service_id = service.lock().await.info().id.clone();
         if !(self.manages_service(&service_id).await) {
             return Err(ShutdownError::ServiceNotManaged(service_id.clone()));
@@ -155,7 +171,10 @@ impl ServiceManager {
         let service_status_event = service_lock.info().status.as_ref();
         let detach_result = self.on_status_change.detach(service_status_event).await;
         if let Err(err) = detach_result {
-            return Err(ShutdownError::StatusDetachmentFailed(service_id.clone(), err));
+            return Err(ShutdownError::StatusDetachmentFailed(
+                service_id.clone(),
+                err,
+            ));
         }
 
         info!("Stopped service {}", service_lock.info().name);
@@ -305,7 +324,7 @@ impl ServiceManager {
             .map(|line| line.len())
             .max()
             .unwrap_or(0);
-        
+
         let mut headline = String::from("Status overview\n");
         headline.push_str("─".repeat(longest_width).as_str());
         headline.push('\n');
@@ -322,7 +341,10 @@ impl ServiceManager {
             Some(weak) => weak,
             None => {
                 error!("ServiceManager's Weak self-reference was None while initializing service {}. This should never happen. Did you not use a ServiceManagerBuilder? Shutting down ungracefully to prevent further undefined behavior.", service.info().name);
-                unreachable!("ServiceManager's Weak self-reference was None while initializing service {}.", service.info().name);
+                unreachable!(
+                    "ServiceManager's Weak self-reference was None while initializing service {}.",
+                    service.info().name
+                );
             }
         };
 
@@ -334,7 +356,6 @@ impl ServiceManager {
                 unreachable!("ServiceManager's Weak self-reference could not be upgraded to Arc while initializing service {}.", service.info().name);
             }
         };
-
 
         //TODO: Add to config instead of hardcoding duration
         let start = service.start(arc);
@@ -351,7 +372,9 @@ impl ServiceManager {
                         .status
                         .set(Status::FailedToStart(error.to_string()))
                         .await;
-                    return Err(StartupError::FailedToStartService(service.info().id.clone()));
+                    return Err(StartupError::FailedToStartService(
+                        service.info().id.clone(),
+                    ));
                 }
             },
             Err(error) => {
@@ -360,7 +383,9 @@ impl ServiceManager {
                     .status
                     .set(Status::FailedToStart(error.to_string()))
                     .await;
-                return Err(StartupError::FailedToStartService(service.info().id.clone()));
+                return Err(StartupError::FailedToStartService(
+                    service.info().id.clone(),
+                ));
             }
         }
 
@@ -386,7 +411,9 @@ impl ServiceManager {
                         .status
                         .set(Status::FailedToStop(error.to_string()))
                         .await;
-                    return Err(ShutdownError::FailedToStopService(service.info().id.clone()));
+                    return Err(ShutdownError::FailedToStopService(
+                        service.info().id.clone(),
+                    ));
                 }
             },
             Err(error) => {
@@ -395,7 +422,9 @@ impl ServiceManager {
                     .status
                     .set(Status::FailedToStop(error.to_string()))
                     .await;
-                return Err(ShutdownError::FailedToStopService(service.info().id.clone()));
+                return Err(ShutdownError::FailedToStopService(
+                    service.info().id.clone(),
+                ));
             }
         }
 
@@ -412,7 +441,10 @@ impl ServiceManager {
         service_lock: &MutexGuard<'_, dyn Service>,
         service: Arc<Mutex<dyn Service>>,
     ) {
-        if self.has_background_task_registered(&service_lock.info().id).await {
+        if self
+            .has_background_task_registered(&service_lock.info().id)
+            .await
+        {
             return;
         }
 
@@ -433,14 +465,14 @@ impl ServiceManager {
                             "Background task of service {} ended unexpectedly! Service will be marked as failed.",
                             service.info().name
                         );
-                
+
                         service
                             .info()
                             .status
                             .set(Status::RuntimeError("Background task ended unexpectedly!".to_string()))
                             .await;
                     }
-            
+
                     Err(error) => {
                         error!(
                             "Background task of service {} ended with error: {}. Service will be marked as failed.",
@@ -470,7 +502,10 @@ impl ServiceManager {
     }
 
     async fn stop_background_task(&self, service_lock: &MutexGuard<'_, dyn Service>) {
-        if !self.has_background_task_registered(&service_lock.info().id).await {
+        if !self
+            .has_background_task_registered(&service_lock.info().id)
+            .await
+        {
             return;
         }
 
