@@ -4,9 +4,7 @@ use std::{fmt::Display, sync::Arc};
 use log::error;
 use tokio::{signal, sync::Mutex};
 
-use crate::service::{
-    types::LifetimedPinnedBoxedFuture, OverallStatus, Service, ServiceManager, ServiceManagerBuilder,
-};
+use crate::service::{OverallStatus, Service, ServiceManager, ServiceManagerBuilder};
 
 #[derive(Debug, Clone, Copy)]
 pub enum ExitReason {
@@ -68,20 +66,14 @@ impl Bot {
         BotBuilder::new(name)
     }
 
-    //TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a future
-    pub fn start(&mut self) -> LifetimedPinnedBoxedFuture<'_, ()> {
-        Box::pin(async move {
-            self.service_manager.start_services().await;
-            //TODO: Potential for further initialization here, like modules
-        })
+    pub async fn start(&mut self) {
+        self.service_manager.start_services().await;
+        //TODO: Potential for further initialization here, like modules
     }
 
-    //TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a future
-    pub fn stop(&mut self) -> LifetimedPinnedBoxedFuture<'_, ()> {
-        Box::pin(async move {
-            self.service_manager.stop_services().await;
-            //TODO: Potential for further deinitialization here, like modules
-        })
+    pub async fn stop(&mut self) {
+        self.service_manager.stop_services().await;
+        //TODO: Potential for further deinitialization here, like modules
     }
 
     pub async fn join(&self) -> ExitReason {

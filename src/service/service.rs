@@ -4,13 +4,15 @@ use std::{
     sync::Arc,
 };
 
+use async_trait::async_trait;
 use downcast_rs::{impl_downcast, DowncastSync};
 
 use crate::event::Observable;
 
 use super::{
     service_manager::ServiceManager,
-    types::{LifetimedPinnedBoxedFuture, LifetimedPinnedBoxedFutureResult, Priority, Status},
+    types::{Priority, Status},
+    BoxedError, LifetimedPinnedBoxedFutureResult,
 };
 
 #[derive(Debug)]
@@ -58,17 +60,18 @@ impl Hash for ServiceInfo {
         self.id.hash(state);
     }
 }
-//TODO: When Rust allows async trait methods to be object-safe, refactor this to use async instead of returning a PinnedBoxedFutureResult
+//TODO: When Rust allows async trait methods to be object-safe, refactor this to not use async_trait anymore
+#[async_trait]
 pub trait Service: DowncastSync {
     fn info(&self) -> &ServiceInfo;
-    fn start(&mut self, service_manager: Arc<ServiceManager>) -> LifetimedPinnedBoxedFutureResult<'_, ()>;
-    fn stop(&mut self) -> LifetimedPinnedBoxedFutureResult<'_, ()>;
+    async fn start(&mut self, service_manager: Arc<ServiceManager>) -> Result<(), BoxedError>;
+    async fn stop(&mut self) -> Result<(), BoxedError>;
     fn task<'a>(&self) -> Option<LifetimedPinnedBoxedFutureResult<'a, ()>> {
         None
     }
 
-    fn is_available(&self) -> LifetimedPinnedBoxedFuture<'_, bool> {
-        Box::pin(async move { matches!(self.info().status.get().await, Status::Started) })
+    async fn is_available(&self) -> bool {
+        matches!(self.info().status.get().await, Status::Started)
     }
 }
 
