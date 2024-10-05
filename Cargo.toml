@@ -1,6 +1,6 @@
 [package]
 name = "lum"
-version = "0.3.5"
+version = "0.3.6"
 authors = ["Torben Schweren"]
 edition = "2021"
 rust-version = "1.80.0"
