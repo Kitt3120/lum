@@ -8,7 +8,6 @@ pub mod config;
 pub mod event;
 pub mod log;
 pub mod service;
-pub mod setlock;
 
 pub fn is_debug() -> bool {
     cfg!(debug_assertions)

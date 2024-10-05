@@ -1,13 +1,11 @@
 use log::error;
 use std::{
     collections::HashMap,
-    sync::{Arc, Weak},
+    sync::{Arc, OnceLock, Weak},
 };
 use thiserror::Error;
 use tokio::{sync::Mutex, task::JoinHandle};
 use uuid::Uuid;
-
-use crate::setlock::{SetLock, SetLockError};
 
 use super::{Event, Subscription};
 
@@ -53,7 +51,7 @@ where
     T: Send + Sync + 'static,
 {
     pub event: Event<T>,
-    weak: Mutex<SetLock<Weak<Self>>>,
+    weak: OnceLock<Weak<Self>>,
     subscriptions: Mutex<HashMap<Uuid, (Subscription, JoinHandle<()>)>>,
 }
 
@@ -68,7 +66,7 @@ where
     {
         let event = Event::new(name);
         let event_repeater = Self {
-            weak: Mutex::new(SetLock::new()),
+            weak: OnceLock::new(),
             event,
             subscriptions: Mutex::new(HashMap::new()),
         };
@@ -76,17 +74,13 @@ where
         let arc = Arc::new(event_repeater);
         let weak = Arc::downgrade(&arc);
 
-        let result = arc.weak.lock().await.set(weak);
-        if let Err(err) = result {
-            match err {
-                SetLockError::AlreadySet => {
-                    error!("Failed to set EventRepeater {}'s Weak self-reference because it was already set. This should never happen. Shutting down ungracefully to prevent further undefined behavior.", arc.event.name);
-                    unreachable!(
-                        "Unable to set EventRepeater {}'s Weak self-reference because it was already set.",
-                        arc.event.name
-                    );
-                }
-            }
+        let result = arc.weak.set(weak);
+        if result.is_err() {
+            error!("Failed to set EventRepeater {}'s Weak self-reference because it was already set. This should never happen. Shutting down ungracefully to prevent further undefined behavior.", arc.event.name);
+            unreachable!(
+                "Unable to set EventRepeater {}'s Weak self-reference because it was already set.",
+                arc.event.name
+            );
         }
 
         arc
@@ -97,8 +91,7 @@ where
     }
 
     pub async fn attach(&self, event: &Event<T>, buffer: usize) -> Result<(), AttachError> {
-        let lock = self.weak.lock().await;
-        let weak = match lock.get() {
+        let weak = match self.weak.get() {
             Some(weak) => weak,
             None => {
                 return Err(AttachError::NotInitialized {

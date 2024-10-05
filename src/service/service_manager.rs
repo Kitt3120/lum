@@ -3,10 +3,10 @@ use super::{
     types::{LifetimedPinnedBoxedFuture, OverallStatus, Priority, ShutdownError, StartupError, Status},
 };
 use crate::{
-    event::EventRepeater, service::Watchdog, setlock::{SetLock, SetLockError}
+    event::EventRepeater, service::Watchdog
 };
 use log::{error, info, warn};
-use std::{collections::HashMap, fmt::Display, mem, sync::{Arc, Weak}, time::Duration};
+use std::{collections::HashMap, fmt::Display, mem, sync::{Arc, OnceLock, Weak}, time::Duration};
 use tokio::{
     spawn,
     sync::{Mutex, MutexGuard},
@@ -54,7 +54,7 @@ pub fn new() -> Self {
 
     pub async fn build(self) -> Arc<ServiceManager> {
         let service_manager = ServiceManager {
-            weak: Mutex::new(SetLock::new()),
+            weak: OnceLock::new(),
             services: self.services,
             background_tasks: Mutex::new(HashMap::new()),
             on_status_change: EventRepeater::new("service_manager_on_status_change").await,
@@ -63,14 +63,10 @@ pub fn new() -> Self {
         let arc = Arc::new(service_manager);
         let weak = Arc::downgrade(&arc);
 
-        let result = arc.weak.lock().await.set(weak);
-        if let Err(err) = result {
-            match err {
-                SetLockError::AlreadySet => {
-                    error!("Unable to set ServiceManager's Weak self-reference in ServiceManagerBuilder because it was already set. This should never happen. Shutting down ungracefully to prevent further undefined behavior.");
-                    unreachable!("Unable to set ServiceManager's Weak self-reference in ServiceManagerBuilder because it was already set.");
-                }
-            }
+        let result = arc.weak.set(weak);
+        if result.is_err() {
+                error!("Unable to set ServiceManager's Weak self-reference in ServiceManagerBuilder because it was already set. This should never happen. Shutting down ungracefully to prevent further undefined behavior.");
+                unreachable!("Unable to set ServiceManager's Weak self-reference in ServiceManagerBuilder because it was already set.");
         }
 
         arc
@@ -78,7 +74,7 @@ pub fn new() -> Self {
 }
 
 pub struct ServiceManager {
-    weak: Mutex<SetLock<Weak<Self>>>,
+    weak: OnceLock<Weak<Self>>,
     background_tasks: Mutex<HashMap<String, JoinHandle<()>>>,
 
     pub services: Vec<Arc<Mutex<dyn Service>>>,
@@ -326,8 +322,7 @@ impl ServiceManager {
         &self,
         service: &mut MutexGuard<'_, dyn Service>,
     ) -> Result<(), StartupError> {
-        let lock = self.weak.lock().await;
-        let weak = match lock.get() {
+        let weak = match self.weak.get() {
             Some(weak) => weak,
             None => {
                 error!("ServiceManager's Weak self-reference was None while initializing service {}. This should never happen. Did you not use a ServiceManagerBuilder? Shutting down ungracefully to prevent further undefined behavior.", service.info().name);
