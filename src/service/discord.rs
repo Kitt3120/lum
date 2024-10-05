@@ -79,16 +79,24 @@ impl Service for DiscordService {
         }
 
         if self.data.set(Arc::clone(&client.data)).is_err() {
-            error!("Could not set data OnceLock because it was already set. This should never happen.");
+            error!(
+                "Could not set data OnceLock because it was already set. This should never happen."
+            );
             return Err("Could not set data OnceLock because it was already set.".into());
         }
 
         if self.http.set(Arc::clone(&client.http)).is_err() {
-            error!("Could not set http OnceLock because it was already set. This should never happen.");
+            error!(
+                "Could not set http OnceLock because it was already set. This should never happen."
+            );
             return Err("Could not set http OnceLock because it was already set.".into());
         }
 
-        if self.shard_manager.set(Arc::clone(&client.shard_manager)).is_err() {
+        if self
+            .shard_manager
+            .set(Arc::clone(&client.shard_manager))
+            .is_err()
+        {
             error!(
                 "Could not set shard_manager OnceLock because it was already set. This should never happen."
             );
@@ -98,7 +106,9 @@ impl Service for DiscordService {
         if let Some(voice_manager) = &client.voice_manager {
             if self.voice_manager.set(Arc::clone(voice_manager)).is_err() {
                 error!("Could not set voice_manager OnceLock because it was already set. This should never happen.");
-                return Err("Could not set voice_manager OnceLock because it was already set.".into());
+                return Err(
+                    "Could not set voice_manager OnceLock because it was already set.".into(),
+                );
             }
         } else {
             warn!("Voice manager is not available");
@@ -153,7 +163,10 @@ struct EventHandler {
 
 impl EventHandler {
     pub fn new(client: Arc<OnceLock<Ready>>, ready_notify: Arc<Notify>) -> Self {
-        Self { client, ready_notify }
+        Self {
+            client,
+            ready_notify,
+        }
     }
 }
 

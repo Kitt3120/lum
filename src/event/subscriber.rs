@@ -61,9 +61,13 @@ where
 
     pub async fn dispatch(&self, data: Arc<T>) -> Result<(), DispatchError<T>> {
         match &self.callback {
-            Callback::Channel(sender) => sender.send(data).await.map_err(DispatchError::ChannelSend),
+            Callback::Channel(sender) => {
+                sender.send(data).await.map_err(DispatchError::ChannelSend)
+            }
             Callback::Closure(closure) => closure(data).map_err(DispatchError::Closure),
-            Callback::AsyncClosure(closure) => closure(data).await.map_err(DispatchError::AsyncClosure),
+            Callback::AsyncClosure(closure) => {
+                closure(data).await.map_err(DispatchError::AsyncClosure)
+            }
         }
     }
 }

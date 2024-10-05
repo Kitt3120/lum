@@ -1,15 +1,25 @@
 [package]
 name = "lum"
 version = "0.2.1"
-edition = "2021"
-description = "Lum Discord Bot"
-license= "MIT"
-readme = "README.md"
 authors = ["Torben Schweren"]
+edition = "2021"
+rust-version = "1.80.0"
+description = "Lum Discord Bot"
+readme = "README.md"
 repository = "https://github.com/Kitt3120/lum"
+license= "MIT"
+keywords = ["chat", "discord", "bot", "framework"]
+categories = ["chat", "discord", "framework"]
 
+[profile.release]
+debug = false
+opt-level = 3
+lto = true
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[profile.dev]
+debug = true
+opt-level = 0
+lto = false
 
 [dependencies]
 async-trait = "0.1.83"

@@ -50,7 +50,12 @@ where
         S: Into<String>,
     {
         let (sender, receiver) = channel(buffer);
-        let subscriber = Subscriber::new(name, log_on_error, remove_on_error, Callback::Channel(sender));
+        let subscriber = Subscriber::new(
+            name,
+            log_on_error,
+            remove_on_error,
+            Callback::Channel(sender),
+        );
 
         let subscription = Subscription::from(&subscriber);
         let receiver_subscription = ReceiverSubscription::new(subscription, receiver);
@@ -116,9 +121,9 @@ where
         let subscription_to_remove = subscription.into();
 
         let mut subscribers = self.subscribers.lock().await;
-        let index = subscribers
-            .iter()
-            .position(|subscription_of_event| subscription_of_event.uuid == subscription_to_remove.uuid);
+        let index = subscribers.iter().position(|subscription_of_event| {
+            subscription_of_event.uuid == subscription_to_remove.uuid
+        });
 
         if let Some(index) = index {
             subscribers.remove(index);
