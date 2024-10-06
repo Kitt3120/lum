@@ -5,6 +5,6 @@ version: 2
 updates:
   - package-ecosystem: "cargo"
     directory: "/"
-    target-branch: development
+    target-branch: main
     schedule:
       interval: "daily"
