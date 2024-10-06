@@ -1,10 +1,40 @@
 name: Publish release
 on:
   push:
-    branches: [release]
+    branches: [release/**]
 jobs:
+  check_version_bump:
+    name: Check version bump
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup Rust toolchain stable-x86_64-unknown-linux-gnu for ubuntu-latest
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable-x86_64-unknown-linux-gnu
+          override: true
+      - name: Read source branch version
+        id: source_version
+        run: echo "version=$(cargo read-manifest | jq -r .version)" >> $GITHUB_OUTPUT
+      - name: Update cargo index
+        run: cargo search
+      - name: Read crates.io version
+        id: crates_io_version
+        run: echo "version=$(cargo search --limit 1 $(cargo read-manifest | jq -r .name) | grep -oP '(?<=lum = ")([0-9]+.[0-9]+.[0-9]+)(?=")')" >> $GITHUB_OUTPUT
+      - name: Parse and compare versions
+        run: |
+          source_version="${{ steps.source_version.outputs.version }}"
+          crates_io_version="${{ steps.crates_io_version.outputs.version }}"
+          if [ "$(printf '%s\n' "$crates_io_version" "$source_version" | sort -V | head -n1)" != "$source_version" ]; then
+            echo "Source branch version ($source_version) is higher than crates.io version ($crates_io_version)."
+          else
+            echo "Source branch version ($source_version) is not higher than crates.io version ($crates_io_version)."
+            exit 1
+          fi
   crates_io:
     name: Publish crates.io
+    needs: check_version_bump
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
