@@ -1,7 +1,7 @@
 name: Publish pre-release
 on:
   push:
-    branches: [development]
+    branches: [main]
 jobs:
   github:
     name: Publish GitHub
@@ -35,4 +35,4 @@ jobs:
       - name: Create release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Provided by GitHub Actions
-        run: gh release create "${{ steps.commit_hash.outputs.commit_hash }}" --repo="$GITHUB_REPOSITORY" --target development --title="Pre-Release ${{ steps.commit_hash.outputs.commit_hash }} (${{ steps.version.outputs.version }})" --generate-notes --prerelease "./target/package/${{ steps.crate_name.outputs.crate_name }}-${{ steps.version.outputs.version }}.crate"
+        run: gh release create "${{ steps.commit_hash.outputs.commit_hash }}" --repo="$GITHUB_REPOSITORY" --target main --title="Pre-Release ${{ steps.commit_hash.outputs.commit_hash }} (${{ steps.version.outputs.version }})" --generate-notes --prerelease "./target/package/${{ steps.crate_name.outputs.crate_name }}-${{ steps.version.outputs.version }}.crate"
