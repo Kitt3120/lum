@@ -3,7 +3,7 @@ use std::sync::Arc;
 use ::log::{error, warn};
 use lum::{
     bot::Bot,
-    config::{Config, ConfigHandler},
+    config::{ConfigHandler, FileConfig},
     log,
     service::{discord::DiscordService, Service},
 };
@@ -49,7 +49,7 @@ fn setup_logger() {
     }
 }
 
-fn initialize_services(config: &Config) -> Vec<Arc<Mutex<dyn Service>>> {
+fn initialize_services(config: &FileConfig) -> Vec<Arc<Mutex<dyn Service>>> {
     //TODO: Add services
     //...
 
