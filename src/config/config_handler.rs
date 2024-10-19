@@ -151,15 +151,15 @@ where
         Ok(config)
     }
 
+    pub fn merge_configs(prioritized_config: &ENV, secondary_config: FILE) -> FILE {
+        secondary_config.merge(prioritized_config)
+    }
+
     pub fn load_config(&self) -> Result<FILE, ConfigParseError> {
         let env_config = self.load_config_from_env()?;
         let file_config = self.load_config_from_file()?;
-        let merged_config = ConfigHandler::merge_configs(env_config, file_config);
+        let merged_config = ConfigHandler::merge_configs(&env_config, file_config);
 
         Ok(merged_config)
-    }
-
-    pub fn merge_configs(prioritized_config: ENV, secondary_config: FILE) -> FILE {
-        secondary_config.merge(&prioritized_config)
     }
 }
