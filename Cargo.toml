@@ -24,7 +24,7 @@ lto = false
 async-trait = "0.1.83"
 dirs = "5.0.1"
 downcast-rs = "1.2.0"
-fern = { version = "0.6.2", features = ["chrono", "colored", "date-based"] }
+fern = { version = "0.7.0", features = ["chrono", "colored", "date-based"] }
 humantime = "2.1.0"
 log = { version = "0.4.20", features = ["serde"] }
 serde = { version = "1.0.193", features = ["derive"] }
