@@ -8,7 +8,9 @@ description = "Lum Discord Bot"
 readme = "README.md"
 repository = "https://github.com/Kitt3120/lum"
 license= "MIT"
+license-file = "LICENSE"
 keywords = ["chat", "discord", "bot", "framework"]
+exclude = [".devcontainer", ".github"]
 
 [profile.release]
 debug = false
