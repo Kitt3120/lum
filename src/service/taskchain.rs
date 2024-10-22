@@ -1,6 +1,6 @@
+use core::mem;
 use log::error;
-use serenity::FutureExt;
-use std::{future::Future, mem::replace, sync::Arc};
+use std::{future::Future, sync::Arc};
 use tokio::sync::{
     mpsc::{channel, Receiver, Sender},
     Mutex,
@@ -8,13 +8,13 @@ use tokio::sync::{
 
 use super::LifetimedPinnedBoxedFuture;
 
-//TODO: Rename to TaskChain and use Event<T> instead of manual subscriber handling
-pub struct Watchdog<'a, T: Send> {
+//TODO: Use Event<T> instead of manual subscriber handling
+pub struct Taskchain<'a, T: Send> {
     task: LifetimedPinnedBoxedFuture<'a, T>,
     subscribers: Arc<Mutex<Vec<Sender<Arc<T>>>>>,
 }
 
-impl<'a, T: 'a + Send> Watchdog<'a, T> {
+impl<'a, T: 'a + Send> Taskchain<'a, T> {
     pub fn new(task: LifetimedPinnedBoxedFuture<'a, T>) -> Self {
         Self {
             task,
@@ -27,12 +27,15 @@ impl<'a, T: 'a + Send> Watchdog<'a, T> {
         FN: FnOnce(T) -> FUT + Send + Sync + 'a,
         FUT: Future<Output = T> + Send + Sync + 'a,
     {
-        let previous_task = replace(
+        let previous_task = mem::replace(
             &mut self.task,
-            Box::pin(async { unreachable!("Undefined watchdog task") }),
+            Box::pin(async { unreachable!("Undefined Taskchain task") }),
         );
 
-        let task = previous_task.then(task);
+        let task = async move {
+            let result = previous_task.await;
+            task(result).await
+        };
 
         self.task = Box::pin(task);
     }
@@ -51,7 +54,7 @@ impl<'a, T: 'a + Send> Watchdog<'a, T> {
 
             if let Err(e) = send_result {
                 error!(
-                    "Failed to send a watchdog task result to one of its subscribers: {}",
+                    "Failed to send a Taskchain task result to one of its subscribers: {}",
                     e
                 );
             }

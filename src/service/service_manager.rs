@@ -2,7 +2,7 @@ use super::{
     service::Service,
     types::{OverallStatus, Priority, ShutdownError, StartupError, Status},
 };
-use crate::{event::EventRepeater, service::Watchdog};
+use crate::{event::EventRepeater, service::Taskchain};
 use log::{error, info, warn};
 use std::{
     collections::HashMap,
@@ -450,9 +450,9 @@ impl ServiceManager {
 
         let task = service_lock.task();
         if let Some(task) = task {
-            let mut watchdog = Watchdog::new(task);
+            let mut taskchain = Taskchain::new(task);
 
-            watchdog.append(|result| async move {
+            taskchain.append(|result| async move {
                 /*
                     We technically only need a read lock here, but we want to immediately stop
                     other services from accessing the service, so we acquire a write lock instead.
@@ -492,7 +492,7 @@ impl ServiceManager {
                 Ok(())
             });
 
-            let join_handle = spawn(watchdog.run());
+            let join_handle = spawn(taskchain.run());
 
             self.background_tasks
                 .lock()
