@@ -2,10 +2,11 @@ use super::{
     service::Service,
     types::{OverallStatus, Priority, ShutdownError, StartupError, Status},
 };
-use crate::{event::EventRepeater, service::Watchdog};
+use crate::{event::EventRepeater, service::Taskchain};
 use log::{error, info, warn};
 use std::{
     collections::HashMap,
+    error::Error,
     fmt::{self, Display},
     mem,
     sync::{Arc, OnceLock, Weak},
@@ -81,7 +82,7 @@ impl ServiceManagerBuilder {
 
 pub struct ServiceManager {
     weak: OnceLock<Weak<Self>>,
-    background_tasks: Mutex<HashMap<String, JoinHandle<()>>>,
+    background_tasks: Mutex<HashMap<String, JoinHandle<Result<(), Box<dyn Error + Send + Sync>>>>>,
 
     pub services: Vec<Arc<Mutex<dyn Service>>>,
     pub on_status_change: Arc<EventRepeater<Status>>,
@@ -450,13 +451,9 @@ impl ServiceManager {
 
         let task = service_lock.task();
         if let Some(task) = task {
-            let mut watchdog = Watchdog::new(task);
+            let mut taskchain = Taskchain::new(task);
 
-            watchdog.append(|result| async move {
-                /*
-                    We technically only need a read lock here, but we want to immediately stop
-                    other services from accessing the service, so we acquire a write lock instead.
-                */
+            taskchain.append(|result| async move {
                 let service = service.lock().await;
 
                 match result {
@@ -492,7 +489,7 @@ impl ServiceManager {
                 Ok(())
             });
 
-            let join_handle = spawn(watchdog.run());
+            let join_handle = spawn(taskchain.run());
 
             self.background_tasks
                 .lock()
