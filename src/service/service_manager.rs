@@ -209,23 +209,22 @@ impl ServiceManager {
         results
     }
 
+    /*
+        I tried to do this in safe rust for 3 days, but I couldn't figure it out
+        Should you come up with a way to do this in safe rust, please make a PR! :)
+        Anyways, this should never cause any issues, since we checked if the service is of type T
+    */
     pub async fn get_service<T>(&self) -> Option<Arc<Mutex<T>>>
     where
         T: Service,
     {
         for service in self.services.iter() {
             let lock = service.lock().await;
+
             let is_t = lock.as_any().is::<T>();
-
             if is_t {
-                let arc_clone = Arc::clone(service);
-                let service_ptr: *const Arc<Mutex<dyn Service>> = &arc_clone;
+                let service_ptr: *const Arc<Mutex<dyn Service>> = service;
 
-                /*
-                    I tried to do this in safe rust for 3 days, but I couldn't figure it out
-                    Should you come up with a way to do this in safe rust, please make a PR! :)
-                    Anyways, this should never cause any issues, since we checked if the service is of type T
-                */
                 unsafe {
                     let t_ptr: *const Arc<Mutex<T>> = mem::transmute(service_ptr);
                     return Some(Arc::clone(&*t_ptr));
