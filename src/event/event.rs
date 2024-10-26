@@ -4,10 +4,13 @@ use std::{
     fmt::{self, Debug, Formatter},
     sync::Arc,
 };
-use tokio::sync::{mpsc::channel, Mutex};
+use tokio::sync::{
+    mpsc::{channel, Receiver},
+    Mutex,
+};
 use uuid::Uuid;
 
-use super::{Callback, DispatchError, ReceiverSubscription, Subscriber, Subscription};
+use super::{Callback, DispatchError, Subscriber};
 
 pub struct Event<T>
 where
@@ -45,7 +48,7 @@ where
         buffer: usize,
         log_on_error: bool,
         remove_on_error: bool,
-    ) -> ReceiverSubscription<Arc<T>>
+    ) -> (Uuid, Receiver<Arc<T>>)
     where
         S: Into<String>,
     {
@@ -57,13 +60,12 @@ where
             Callback::Channel(sender),
         );
 
-        let subscription = Subscription::from(&subscriber);
-        let receiver_subscription = ReceiverSubscription::new(subscription, receiver);
+        let uuid = subscriber.uuid;
 
         let mut subscribers = self.subscribers.lock().await;
         subscribers.push(subscriber);
 
-        receiver_subscription
+        (uuid, receiver)
     }
 
     pub async fn subscribe_async_closure<S>(
@@ -72,7 +74,7 @@ where
         closure: impl Fn(Arc<T>) -> PinnedBoxedFutureResult<()> + Send + Sync + 'static,
         log_on_error: bool,
         remove_on_error: bool,
-    ) -> Subscription
+    ) -> Uuid
     where
         S: Into<String>,
     {
@@ -82,12 +84,13 @@ where
             remove_on_error,
             Callback::AsyncClosure(Box::new(closure)),
         );
-        let subscription = Subscription::from(&subscriber);
+
+        let uuid = subscriber.uuid;
 
         let mut subscribers = self.subscribers.lock().await;
         subscribers.push(subscriber);
 
-        subscription
+        uuid
     }
 
     pub async fn subscribe_closure<S>(
@@ -96,7 +99,7 @@ where
         closure: impl Fn(Arc<T>) -> Result<(), BoxedError> + Send + Sync + 'static,
         log_on_error: bool,
         remove_on_error: bool,
-    ) -> Subscription
+    ) -> Uuid
     where
         S: Into<String>,
     {
@@ -106,30 +109,32 @@ where
             remove_on_error,
             Callback::Closure(Box::new(closure)),
         );
-        let subscription = Subscription::from(&subscriber);
+
+        let uuid = subscriber.uuid;
 
         let mut subscribers = self.subscribers.lock().await;
         subscribers.push(subscriber);
 
-        subscription
+        uuid
     }
 
-    pub async fn unsubscribe<S>(&self, subscription: S) -> Option<Subscription>
+    pub async fn unsubscribe<UUID>(&self, uuid: &UUID) -> bool
     where
-        S: Into<Subscription>,
+        UUID: AsRef<Uuid>,
     {
-        let subscription_to_remove = subscription.into();
+        let uuid = uuid.as_ref();
 
         let mut subscribers = self.subscribers.lock().await;
-        let index = subscribers.iter().position(|subscription_of_event| {
-            subscription_of_event.uuid == subscription_to_remove.uuid
-        });
+        let index = subscribers
+            .iter()
+            .position(|subscriber| subscriber.uuid == *uuid);
 
-        if let Some(index) = index {
-            subscribers.remove(index);
-            None
-        } else {
-            Some(subscription_to_remove)
+        match index {
+            Some(index) => {
+                subscribers.remove(index);
+                true
+            }
+            None => false,
         }
     }
 
