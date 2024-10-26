@@ -28,7 +28,7 @@ where
     }
 
     pub async fn get(&self) -> Arc<Mutex<T>> {
-        Arc::clone(&self.value)
+        self.value.clone()
     }
 
     pub async fn set(&self, value: T) -> ObservableResult<Mutex<T>> {
@@ -56,5 +56,14 @@ where
             Ok(_) => ObservableResult::Changed(Ok(())),
             Err(errors) => ObservableResult::Changed(Err(errors)),
         }
+    }
+}
+
+impl<T> AsRef<Event<Mutex<T>>> for ArcObservable<T>
+where
+    T: Send + 'static + Hash,
+{
+    fn as_ref(&self) -> &Event<Mutex<T>> {
+        &self.on_change
     }
 }

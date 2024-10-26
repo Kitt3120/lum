@@ -2,7 +2,7 @@ use core::fmt;
 use std::{fmt::Display, sync::Arc};
 
 use log::error;
-use tokio::{signal, sync::Mutex};
+use tokio::{signal, sync::Mutex, task};
 
 use crate::service::{OverallStatus, Service, ServiceManager, ServiceManagerBuilder};
 
@@ -91,16 +91,22 @@ impl Bot {
             }
         });
 
+        let task_id = match task::try_id() {
+            Some(id) => id.to_string(),
+            None => "None".to_string(),
+        };
+        let subscriber_name = format!("Bot join on task {}", task_id);
+
         let service_manager_clone = self.service_manager.clone();
-        let mut receiver = self
+        let (_, mut receiver) = self
             .service_manager
             .on_status_change
             .event
-            .subscribe_channel("t", 2, true, true)
+            .subscribe_channel(subscriber_name, 2, true, true)
             .await;
         let status_task = tokio::spawn(async move {
             let service_manager = service_manager_clone;
-            while (receiver.receiver.recv().await).is_some() {
+            while (receiver.recv().await).is_some() {
                 let overall_status = service_manager.overall_status().await;
                 if overall_status == OverallStatus::Unhealthy {
                     return;

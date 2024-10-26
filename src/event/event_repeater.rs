@@ -7,7 +7,7 @@ use thiserror::Error;
 use tokio::{sync::Mutex, task::JoinHandle};
 use uuid::Uuid;
 
-use super::{Event, Subscription};
+use super::Event;
 
 #[derive(Debug, Error)]
 pub enum AttachError {
@@ -52,7 +52,7 @@ where
 {
     pub event: Event<T>,
     weak: OnceLock<Weak<Self>>,
-    subscriptions: Mutex<HashMap<Uuid, (Subscription, JoinHandle<()>)>>,
+    subscriptions: Mutex<HashMap<Uuid, (Uuid, JoinHandle<()>)>>,
 }
 
 impl<T> EventRepeater<T>
@@ -118,19 +118,16 @@ where
             });
         }
 
-        let receiver_subscription = event
+        let (uuid, mut receiver) = event
             .subscribe_channel(&self.event.name, buffer, true, true)
             .await;
-
-        let subscription = receiver_subscription.subscription;
-        let mut receiver = receiver_subscription.receiver;
 
         let join_handle = tokio::spawn(async move {
             while let Some(value) = receiver.recv().await {
                 let _ = arc.event.dispatch(value).await;
             }
         });
-        subscriptions.insert(event.uuid, (subscription, join_handle));
+        subscriptions.insert(event.uuid, (uuid, join_handle));
 
         Ok(())
     }
